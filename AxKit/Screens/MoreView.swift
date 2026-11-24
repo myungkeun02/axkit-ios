@@ -550,8 +550,12 @@ struct BlocksScreen: View {
                     if let title = b.title { CardHeader(title: title) }
                     CardList(items: (b.rows ?? []).enumerated().map { KV(title: "\($0.offset)", value: "") }) { kv in
                         let r = (b.rows ?? [])[Int(kv.title) ?? 0]
-                        CardRow(title: r.title, detail: r.detail) {
-                            if let t = r.trailing { Text(t).font(.footnote).foregroundStyle(.secondary) }
+                        BlockRowView(row: r) {
+                            // §34: like an `ask` block — only a chat message; the assistant does the rest.
+                            if let message = r.tapMessage {
+                                model.send(message, in: "")
+                                model.toast = "비서에게 부탁했어요"
+                            }
                         }
                         .contextMenu {
                             // §20: a site the assistant remembers can be forgotten — asked in the chat, where ways.forget_site runs.
@@ -582,6 +586,31 @@ struct BlocksScreen: View {
     private func load() async {
         guard let client = model.client else { return }
         do { state = .loaded(try await client.view(BlocksView.self, name)) } catch { state = .failed(error.friendly) }
+    }
+}
+
+/// One row of a `list` block. With `message` (§34) it is a button with a chevron; without, plain text as before.
+private struct BlockRowView: View {
+    var row: BlocksView.Row
+    var tap: () -> Void
+
+    var body: some View {
+        if row.tapMessage != nil {
+            Button(action: tap) {
+                CardRow(title: row.title, detail: row.detail) {
+                    HStack(spacing: 6) {
+                        if let t = row.trailing { Text(t).font(.footnote).foregroundStyle(.secondary) }
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("비서에게 이 일을 부탁해요")
+        } else {
+            CardRow(title: row.title, detail: row.detail) {
+                if let t = row.trailing { Text(t).font(.footnote).foregroundStyle(.secondary) }
+            }
+        }
     }
 }
 

@@ -283,7 +283,21 @@ public struct HardwareView: Decodable, Sendable {
 // MARK: server-drawn screens (R9)
 
 public struct BlocksView: Decodable, Sendable {
-    public struct Row: Decodable, Hashable, Sendable { public var title: String; public var detail: String?; public var trailing: String? }
+    public struct Row: Decodable, Hashable, Sendable {
+        public var title: String
+        public var detail: String?
+        public var trailing: String?
+        /// §34: when present, tapping the row sends this sentence to the main chat (like an `ask` block).
+        public var message: String?
+        public init(title: String, detail: String? = nil, trailing: String? = nil, message: String? = nil) {
+            self.title = title; self.detail = detail; self.trailing = trailing; self.message = message
+        }
+        /// The sentence to send, or nil when the row is not tappable (missing or only spaces).
+        public var tapMessage: String? {
+            guard let m = message?.trimmingCharacters(in: .whitespacesAndNewlines), !m.isEmpty else { return nil }
+            return m
+        }
+    }
     public struct Block: Decodable, Hashable, Sendable {
         /// `text` · `stat` · `list` · `note` · `ask` (a button that sends `message` to the main chat)
         public var kind: String

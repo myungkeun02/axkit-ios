@@ -686,7 +686,7 @@ const capabilities = {
     { name: 'today', version: 1, actions: [] }, { name: 'approvals', version: 1, actions: [] }, { name: 'bots', version: 1, actions: ['createTeam', 'setTiers', 'meeting', 'setInstructions'] },
     { name: 'docgraph', version: 1, actions: [] }, { name: 'calendar', version: 1, actions: ['add'] }, { name: 'jobs', version: 1, actions: ['toggle'] },
     { name: 'spending', version: 1, actions: ['categorize', 'budget', 'add'] }, { name: 'usage', version: 1, actions: [] }, { name: 'providers', version: 1, actions: [] }, { name: 'autonomy', version: 1, actions: ['revoke'] }, { name: 'modeltiers', version: 1, actions: ['rank', 'purpose'] },
-    { name: 'hardware', version: 1, actions: [] }, { name: 'recordings', version: 1, actions: [] }, { name: 'routines', version: 1, actions: ['toggle', 'remove'] }, { name: 'projects', version: 1, actions: ['save', 'refresh'] }, { name: 'team-plan', version: 1, actions: ['save', 'apply', 'decline'] }, { name: 'first-look', version: 1, actions: ['revise', 'apply', 'start'] }, { name: 'work', version: 1, actions: [] }, { name: 'people', version: 1, actions: ['edit'] }, { name: 'browser-live', version: 1, actions: ['start', 'tap', 'type', 'key', 'scroll', 'back', 'done'] }, { name: 'file-changes', version: 1, actions: [], ui: 'blocks', title: '파일 변경', icon: 'doc.badge.clock' }, { name: 'ways', version: 1, actions: [], ui: 'blocks', title: '알아 둔 사이트·방법', icon: 'globe' }, { name: 'parcel', version: 1, actions: [], title: '택배 조회', icon: 'shippingbox', ui: 'blocks' },
+    { name: 'hardware', version: 1, actions: [] }, { name: 'recordings', version: 1, actions: [] }, { name: 'routines', version: 1, actions: ['toggle', 'remove'] }, { name: 'projects', version: 1, actions: ['save', 'refresh'] }, { name: 'team-plan', version: 1, actions: ['save', 'apply', 'decline'] }, { name: 'first-look', version: 1, actions: ['revise', 'apply', 'start'] }, { name: 'work', version: 1, actions: [] }, { name: 'people', version: 1, actions: ['edit'] }, { name: 'browser-live', version: 1, actions: ['start', 'tap', 'type', 'key', 'scroll', 'back', 'done'] }, { name: 'file-changes', version: 1, actions: [], ui: 'blocks', title: '파일 변경', icon: 'doc.badge.clock' }, { name: 'ways', version: 1, actions: [], ui: 'blocks', title: '알아 둔 사이트·방법', icon: 'globe' }, { name: 'parcel', version: 1, actions: [], title: '택배 조회', icon: 'shippingbox', ui: 'blocks' }, { name: 'drive', version: 1, actions: [], ui: 'blocks', title: '드라이브', icon: 'externaldrive' },
   ],
 };
 
@@ -993,6 +993,14 @@ async function app(req, res, path, url) {
           { kind: 'text', text: '비서가 일할 때 먼저 찾아보는 사이트와, 해 본 적 있는 방법이에요.' },
           { kind: 'list', title: '사이트', rows: [{ title: 'tank.example.com', detail: '회사 관리 툴', trailing: '회사' }, { title: '쿠팡', detail: '생활용품 주문', trailing: '쇼핑' }] },
           { kind: 'list', title: '해 본 일', rows: [{ title: '원두 재주문', detail: '커피상회 사이트 · 결제 직전에 멈추고 물어봄', trailing: '3번' }] }] }));
+        case 'drive': return send(res, 200, view(name, { title: '드라이브', blocks: [
+          { kind: 'stat', title: '최근 30일 동안 바뀐 내 파일', value: '3건' },
+          { kind: 'list', title: '오늘 · 2건', rows: [
+            { title: '11월 매출 정리', detail: '모아카페 · me@example.com', trailing: '14:05', message: '드라이브의 "11월 매출 정리" 내용을 요약해 줘' },
+            { title: '견적서 초안', detail: '한빛랩', trailing: '10:30', message: '드라이브의 "견적서 초안" 내용을 요약해 줘' }] },
+          { kind: 'list', title: '지난주 · 1건', rows: [{ title: '근무표 (옛 양식)', detail: '모아카페', trailing: '11월 17일' }] },
+          { kind: 'note', text: '내가 바꾼 파일만 보여요. 5분마다 새로 읽어요.' },
+          { kind: 'ask', title: '이번 주에 바뀐 파일 정리해 줘', message: '드라이브에서 이번 주에 바뀐 파일 정리해 줘' }] }));
         case 'recordings': return send(res, 200, view(name, { recordings: [...recordings.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).map(({ chunks, ...rest }) => rest) }));
         default: return send(res, 404, { ok: false, error: 'no_view' });
       }

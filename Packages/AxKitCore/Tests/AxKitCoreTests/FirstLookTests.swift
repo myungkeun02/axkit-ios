@@ -228,3 +228,20 @@ final class LocationRepeatTests: XCTestCase {
         XCTAssertTrue(g.allow("안녕하세요", in: "dev", at: t.addingTimeInterval(5.1)))
     }
 }
+
+final class BlockRowMessageTests: XCTestCase {
+    func testRowMessageMakesRowTappable() throws {
+        let json = """
+        {"title":"드라이브","blocks":[{"kind":"list","title":"오늘 · 2건","rows":[
+          {"title":"11월 매출 정리","detail":"모아카페","trailing":"14:05","message":"드라이브의 \\"11월 매출 정리\\" 내용을 요약해 줘"},
+          {"title":"견적서","message":"   "},
+          {"title":"근무표"}]}]}
+        """
+        let v = try JSONDecoder().decode(BlocksView.self, from: Data(json.utf8))
+        let rows = try XCTUnwrap(v.blocks.first?.rows)
+        XCTAssertEqual(rows[0].tapMessage, "드라이브의 \"11월 매출 정리\" 내용을 요약해 줘")
+        XCTAssertNil(rows[1].tapMessage)
+        XCTAssertNil(rows[2].tapMessage)
+        XCTAssertEqual(rows[2].trailing, nil)
+    }
+}
