@@ -1,0 +1,175 @@
+# XcodeGen spec: `cd ios && xcodegen` makes AxKit.xcodeproj (not committed).
+# Bundle id and team come from Config/Base.xcconfig, overridden by Config/Local.xcconfig (not committed).
+name: AxKit
+options:
+  bundleIdPrefix: dev.axkit
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  developmentLanguage: ko
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    TARGETED_DEVICE_FAMILY: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+packages:
+  AxKitCore:
+    path: Packages/AxKitCore
+  # 터미널 (SSH straight to a Mac over Tailscale)
+  # 1.11.2: no build-tool plugin (1.19+ needs approval in every build/archive) and no Metal shaders (1.12+ needs the Metal toolchain).
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    exactVersion: 1.11.2
+  Citadel:
+    url: https://github.com/orlandos-nl/Citadel
+    exactVersion: 0.12.1
+  swift-nio:
+    url: https://github.com/apple/swift-nio
+    from: 2.80.0
+  # Citadel pins this fork of apple/swift-nio-ssh; we name the same one so NIOSSH types line up.
+  swift-nio-ssh:
+    url: https://github.com/Wellz26/swift-nio-ssh.git
+    from: 0.3.4
+targets:
+  AxKit:
+    type: application
+    platform: iOS
+    sources:
+      - path: AxKit
+      - path: Shared
+    dependencies:
+      - package: AxKitCore
+      - package: SwiftTerm
+      - package: Citadel
+      - package: swift-nio
+        product: NIOCore
+      - package: swift-nio-ssh
+        product: NIOSSH
+      - target: AxKitShare
+        embed: true
+      - target: AxKitWidget
+        embed: true
+    entitlements:
+      path: AxKit/AxKit.entitlements
+      properties:
+        aps-environment: development
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)$(AX_BUNDLE_ID).shared
+        com.apple.security.application-groups:
+          - group.$(AX_BUNDLE_ID)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(AX_BUNDLE_ID)
+        PRODUCT_NAME: AxKit
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # swift-nio/swift-crypto use Span; on iOS 17–18 the app must carry libswiftCompatibilitySpan.dylib or it dies at launch.
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: YES
+    info:
+      path: AxKit/Info.plist
+      properties:
+        CFBundleDisplayName: $(AX_DISPLAY_NAME)
+        CFBundleDevelopmentRegion: ko
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen:
+          UIColorName: AccentColor
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.axkit.pair
+            CFBundleURLSchemes: [axkit]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSCameraUsageDescription: 맥에 뜬 연결 QR을 찍을 때만 카메라를 써요.
+        NSLocationWhenInUseUsageDescription: 라떼가 지금 계신 곳 기준으로 길찾기·근처 추천을 하려고 위치를 써요
+        NSLocationAlwaysAndWhenInUseUsageDescription: 라떼가 지금 계신 곳 기준으로 길찾기·근처 추천을 하려고 위치를 써요. 항상 허용하면 앱을 닫아 두어도 크게 움직였을 때만 알려요.
+        NSMicrophoneUsageDescription: 회의나 메모를 녹음해 회의록으로 정리하거나, 입력칸에 말로 입력할 때만 마이크를 써요. 받아쓴 소리는 내 맥에서 글로 바꾼 뒤 바로 지워요.
+        UIBackgroundModes: [audio, remote-notification]
+        AXKeychainGroup: $(AppIdentifierPrefix)$(AX_BUNDLE_ID).shared
+        AXAppGroup: group.$(AX_BUNDLE_ID)
+        AXSSHHosts: $(AX_SSH_HOSTS)
+        NSLocalNetworkUsageDescription: 집 와이파이에 있는 내 맥과 이야기할 때 써요.
+  AxKitShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: AxKitShare
+      - path: Shared
+    dependencies:
+      - package: AxKitCore
+    entitlements:
+      path: AxKitShare/AxKitShare.entitlements
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)$(AX_BUNDLE_ID).shared
+        com.apple.security.application-groups:
+          - group.$(AX_BUNDLE_ID)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(AX_BUNDLE_ID).share
+        PRODUCT_NAME: AxKitShare
+    info:
+      path: AxKitShare/Info.plist
+      properties:
+        CFBundleDisplayName: $(AX_DISPLAY_NAME)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        AXKeychainGroup: $(AppIdentifierPrefix)$(AX_BUNDLE_ID).shared
+        AXAppGroup: group.$(AX_BUNDLE_ID)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsImageWithMaxCount: 1
+              NSExtensionActivationSupportsFileWithMaxCount: 1
+  AxKitWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: AxKitWidget
+      - path: Shared
+    dependencies:
+      - package: AxKitCore
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    entitlements:
+      path: AxKitWidget/AxKitWidget.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.$(AX_BUNDLE_ID)
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(AX_BUNDLE_ID).widget
+        PRODUCT_NAME: AxKitWidget
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    info:
+      path: AxKitWidget/Info.plist
+      properties:
+        CFBundleDisplayName: $(AX_DISPLAY_NAME)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        AXAppGroup: group.$(AX_BUNDLE_ID)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+schemes:
+  AxKit:
+    build:
+      targets:
+        AxKit: all
+        AxKitShare: all
+        AxKitWidget: all
+    test:
+      gatherCoverageData: false
+      targets:
+        - package: AxKitCore/AxKitCoreTests

@@ -1,0 +1,10 @@
+Config/Local.xcconfig
+*.xcodeproj/
+build/
+DerivedData/
+.build/
+*.xcresult
+.swiftpm/
+AxKit/Info.plist
+AxKitShare/Info.plist
+AxKitWidget/Info.plist

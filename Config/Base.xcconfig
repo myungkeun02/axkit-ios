@@ -1,0 +1,14 @@
+// Shared build settings. Put your own values in Config/Local.xcconfig (not committed):
+//   AX_BUNDLE_ID = com.example.mybot
+//   DEVELOPMENT_TEAM = ABCDE12345
+//   AX_DISPLAY_NAME = AX 라떼
+AX_BUNDLE_ID = dev.axkit.app
+// Name under the icon on the home screen (also the share sheet and widget).
+AX_DISPLAY_NAME = ax-kit
+// Macs the 터미널 lists from the start: name=user@address[:port], comma separated. Empty here; set it in Local.xcconfig.
+AX_SSH_HOSTS =
+DEVELOPMENT_TEAM =
+MARKETING_VERSION = 0.2.0
+CURRENT_PROJECT_VERSION = 1
+
+#include? "Local.xcconfig"
