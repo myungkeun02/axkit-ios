@@ -6,7 +6,11 @@ import Foundation
 // MARK: today (§5.1)
 
 public struct TodayView: Decodable, Sendable {
-    public struct Event: Decodable, Hashable, Sendable { public var title: String; public var start: String; public var end: String?; public var allDay: Bool? }
+    public struct Event: Decodable, Hashable, Sendable {
+        public var title: String; public var start: String; public var end: String?; public var allDay: Bool?
+        /// §36: which calendar it is on (sent when the owner has two or more).
+        public var calendar: String?
+    }
     public struct Todo: Decodable, Hashable, Sendable { public var text: String; public var due: String?; public var source: String? }
     public var date: String
     public var events: [Event]?
@@ -148,6 +152,21 @@ public struct CalendarView: Decodable, Sendable {
         public var end: Date?
         public var allDay: Bool?
         public var place: String?
+        /// §36: the calendar's name (two or more calendars) and the Google account (two or more accounts).
+        public var calendar: String?
+        public var account: String?
+    }
+    /// §36: one of the owner's calendars — for the legend and for choosing where a new event goes.
+    public struct CalendarInfo: Decodable, Hashable, Sendable, Identifiable {
+        public var id: String
+        public var name: String
+        public var primary: Bool?
+        public var writable: Bool?
+        public var description: String?
+        public var account: String?
+        public init(id: String, name: String, primary: Bool? = nil, writable: Bool? = nil, description: String? = nil, account: String? = nil) {
+            self.id = id; self.name = name; self.primary = primary; self.writable = writable; self.description = description; self.account = account
+        }
     }
     public struct Done: Decodable, Hashable, Sendable, Identifiable {
         public var id: String
@@ -164,8 +183,76 @@ public struct CalendarView: Decodable, Sendable {
     }
     public var month: String
     public var days: [Day]
+    /// §36 (older Macs send neither).
+    public var calendars: [CalendarInfo]?
+    /// The Mac's Google sign-in predates the calendar-list permission: only the main calendar is read.
+    public var calendarsLimited: Bool?
+
+    enum CodingKeys: String, CodingKey { case month, days, calendars, calendarsLimited }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        month = try c.decode(String.self, forKey: .month)
+        days = try c.decode([Day].self, forKey: .days)
+        calendars = (try? c.decode([Lossy<CalendarInfo>].self, forKey: .calendars))?.compactMap(\.value)
+        calendarsLimited = try? c.decode(Bool.self, forKey: .calendarsLimited)
+    }
 
     public func day(_ ymd: String) -> Day? { days.first { $0.date == ymd } }
+}
+
+/// §36: colors, legend and the add-sheet choices for several calendars.
+public enum CalendarChoice {
+    /// How many colors the app has; index 0 is the main (primary) calendar's.
+    public static let colorCount = 8
+
+    /// The same id always gets the same color (not Swift's per-launch hash). The primary calendar is always 0.
+    public static func colorIndex(_ cal: CalendarView.CalendarInfo) -> Int {
+        if cal.primary == true { return 0 }
+        var h: UInt32 = 5381
+        for b in cal.id.utf8 { h = (h &* 33) ^ UInt32(b) }
+        return 1 + Int(h % UInt32(colorCount - 1))
+    }
+
+    /// The calendar an event is on: by name (and account when both sides have one). Nil when unknown.
+    public static func info(name: String?, account: String?, in calendars: [CalendarView.CalendarInfo]) -> CalendarView.CalendarInfo? {
+        guard let name, !name.isEmpty else { return nil }
+        let same = calendars.filter { $0.name == name }
+        if let account, same.count > 1, let hit = same.first(where: { $0.account == account }) { return hit }
+        return same.first
+    }
+
+    /// Legend: only worth showing with two or more calendars. Primary first, then in the Mac's order.
+    public static func legend(_ calendars: [CalendarView.CalendarInfo]?) -> [CalendarView.CalendarInfo] {
+        guard let calendars, calendars.count > 1 else { return [] }
+        return sorted(calendars)
+    }
+
+    /// Where a new event can go: writable ones (missing = writable), primary first.
+    public static func writable(_ calendars: [CalendarView.CalendarInfo]?) -> [CalendarView.CalendarInfo] {
+        sorted((calendars ?? []).filter { $0.writable != false })
+    }
+
+    /// The picker is hidden with one (or no) writable calendar: the Mac then uses its main one.
+    public static func needsPicker(_ calendars: [CalendarView.CalendarInfo]?) -> Bool { writable(calendars).count > 1 }
+
+    public static func defaultChoice(_ calendars: [CalendarView.CalendarInfo]?) -> String? { writable(calendars).first?.id }
+
+    /// "개인" or "개인 · me@example.com" when two accounts share calendar names.
+    public static func label(_ cal: CalendarView.CalendarInfo, among calendars: [CalendarView.CalendarInfo]) -> String {
+        let twins = calendars.filter { $0.name == cal.name }.count > 1
+        if twins, let a = cal.account, !a.isEmpty { return "\(cal.name) · \(a)" }
+        return cal.name
+    }
+
+    public static let limitedNote = "기본 캘린더만 보여요 — 비서 맥에서 ax-kit connect google을 한 번 더 해 주세요"
+
+    private static func sorted(_ list: [CalendarView.CalendarInfo]) -> [CalendarView.CalendarInfo] {
+        list.enumerated().sorted { a, b in
+            let pa = a.element.primary == true, pb = b.element.primary == true
+            if pa != pb { return pa }
+            return a.offset < b.offset
+        }.map(\.element)
+    }
 }
 
 // MARK: jobs (§7.8; toggle = R6)

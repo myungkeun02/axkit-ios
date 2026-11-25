@@ -25,8 +25,12 @@ struct CalendarScreen: View {
                     LoadableView(state: state, retry: load) { data in
                         VStack(alignment: .leading, spacing: 16) {
                             grid(data)
-                            legend
-                            dayDetail(data.day(selected))
+                            legend(data)
+                            if data.calendarsLimited == true {
+                                Label(CalendarChoice.limitedNote, systemImage: "info.circle")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                            dayDetail(data.day(selected), calendars: data.calendars ?? [])
                         }
                     }
                     .frame(minHeight: 300)
@@ -49,7 +53,7 @@ struct CalendarScreen: View {
                 }
             }
             .sheet(isPresented: $adding) {
-                NewEventSheet(day: selected) { added in
+                NewEventSheet(day: selected, calendars: state.value?.calendars) { added in
                     if let added { selected = added; month = String(added.prefix(7)) }
                     await load()
                 }
@@ -74,11 +78,19 @@ struct CalendarScreen: View {
         }
     }
 
-    private var legend: some View {
-        HStack(spacing: 16) {
-            Label { Text("일정") } icon: { Circle().fill(Color.accentColor).frame(width: 8, height: 8) }
+    /// One calendar: plans (blue) and what got done (green). Several (§36): a color per calendar, then 한 일.
+    private func legend(_ data: CalendarView) -> some View {
+        let cals = CalendarChoice.legend(data.calendars)
+        return FlowLayout(spacing: 12, lineSpacing: 6) {
+            if cals.isEmpty {
+                Label { Text("일정") } icon: { Circle().fill(Color.accentColor).frame(width: 8, height: 8) }
+            }
+            ForEach(cals) { cal in
+                Label { Text(verbatim: CalendarChoice.label(cal, among: cals)).lineLimit(1) } icon: {
+                    Circle().fill(CalendarTint.color(cal)).frame(width: 8, height: 8)
+                }
+            }
             Label { Text("한 일") } icon: { Circle().fill(.green).frame(width: 8, height: 8) }
-            Spacer()
         }
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -97,7 +109,8 @@ struct CalendarScreen: View {
             ForEach(Array(cells.enumerated()), id: \.offset) { _, day in
                 if let day {
                     let ymd = "\(month)-\(String(format: "%02d", day))"
-                    DayCell(day: day, isToday: ymd == Format.ymd(Date()), isSelected: ymd == selected, data: data.day(ymd))
+                    DayCell(day: day, isToday: ymd == Format.ymd(Date()), isSelected: ymd == selected, data: data.day(ymd),
+                            calendars: data.calendars ?? [])
                         .onTapGesture { selected = ymd }
                 } else {
                     Color.clear.frame(height: 48)
@@ -108,7 +121,7 @@ struct CalendarScreen: View {
         .background(Theme.cardBackground, in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
     }
 
-    @ViewBuilder private func dayDetail(_ day: CalendarView.Day?) -> some View {
+    @ViewBuilder private func dayDetail(_ day: CalendarView.Day?, calendars: [CalendarView.CalendarInfo]) -> some View {
         let parts = selected.split(separator: "-")
         Text("\(Int(parts[safe: 1] ?? "") ?? 0)월 \(Int(parts[safe: 2] ?? "") ?? 0)일").font(.title3.bold())
         let events = day?.events ?? []
@@ -121,11 +134,20 @@ struct CalendarScreen: View {
                 VStack(alignment: .leading, spacing: 12) {
                     CardHeader(title: "일정")
                     ForEach(events) { e in
+                        let cal = CalendarChoice.info(name: e.calendar, account: e.account, in: calendars)
                         HStack(alignment: .top, spacing: 12) {
                             Text(e.allDay == true ? "종일" : Format.clock(e.start)).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary).frame(width: 76, alignment: .leading)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(e.title).font(.body.weight(.medium))
                                 if let place = e.place { Text(place).font(.footnote).foregroundStyle(.secondary) }
+                                if let name = e.calendar, !name.isEmpty {
+                                    HStack(spacing: 5) {
+                                        Circle().fill(cal.map(CalendarTint.color) ?? .secondary).frame(width: 7, height: 7)
+                                        Text(verbatim: [name, e.account].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                                            .lineLimit(1)
+                                    }
+                                    .font(.caption).foregroundStyle(.secondary)
+                                }
                             }
                         }
                         .accessibilityElement(children: .combine)
@@ -172,6 +194,20 @@ private struct DayCell: View {
     var isToday: Bool
     var isSelected: Bool
     var data: CalendarView.Day?
+    var calendars: [CalendarView.CalendarInfo] = []
+
+    /// Up to three event dots: one per calendar that has something this day (one blue dot with a single calendar).
+    private var eventColors: [Color] {
+        guard let events = data?.events, !events.isEmpty else { return [] }
+        guard calendars.count > 1 else { return [.accentColor] }
+        var seen: [Color] = []
+        for e in events {
+            let c = CalendarChoice.info(name: e.calendar, account: e.account, in: calendars).map(CalendarTint.color) ?? .accentColor
+            if !seen.contains(c) { seen.append(c) }
+            if seen.count == 3 { break }
+        }
+        return seen
+    }
 
     var body: some View {
         VStack(spacing: 4) {
@@ -181,7 +217,7 @@ private struct DayCell: View {
                 .foregroundStyle(isSelected ? .white : isToday ? Color.accentColor : .primary)
                 .background(isSelected ? Color.accentColor : .clear, in: Circle())
             HStack(spacing: 3) {
-                if !(data?.events.isEmpty ?? true) { Circle().fill(Color.accentColor).frame(width: 6, height: 6) }
+                ForEach(Array(eventColors.enumerated()), id: \.offset) { _, c in Circle().fill(c).frame(width: 6, height: 6) }
                 if !(data?.done.isEmpty ?? true) { Circle().fill(.green).frame(width: 6, height: 6) }
             }
             .frame(height: 6)
@@ -201,6 +237,8 @@ extension Array {
 /// 일정 추가: title, day, time (or all day), place. Saved to the Mac's calendar.
 struct NewEventSheet: View {
     var day: String
+    /// §36: the owner's calendars (nil from an older Mac). The picker shows only with two or more writable ones.
+    var calendars: [CalendarView.CalendarInfo]? = nil
     var done: (String?) async -> Void
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -210,8 +248,12 @@ struct NewEventSheet: View {
     @State private var allDay = false
     @State private var place = ""
     @State private var saving = false
+    @State private var calendarId: String?
 
-    private struct Ack: Decodable { var id: String? }
+    private struct Ack: Decodable { var id: String?; var calendar: String? }
+
+    private var choices: [CalendarView.CalendarInfo] { CalendarChoice.writable(calendars) }
+    private var chosen: CalendarView.CalendarInfo? { choices.first { $0.id == calendarId } }
 
     var body: some View {
         NavigationStack {
@@ -235,6 +277,32 @@ struct NewEventSheet: View {
                         }
                     }
                 }
+                if CalendarChoice.needsPicker(calendars) {
+                    Panel {
+                        HStack {
+                            Text("캘린더")
+                            Spacer()
+                            Menu {
+                                Picker("캘린더", selection: $calendarId) {
+                                    ForEach(choices) { cal in
+                                        Text(verbatim: CalendarChoice.label(cal, among: choices)).tag(Optional(cal.id))
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    if let cal = chosen { Circle().fill(CalendarTint.color(cal)).frame(width: 10, height: 10) }
+                                    Text(verbatim: chosen.map { CalendarChoice.label($0, among: choices) } ?? "기본 캘린더")
+                                        .lineLimit(1)
+                                    Image(systemName: "chevron.up.chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                                }
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 10).padding(.vertical, 6)
+                                .background(Theme.page, in: Capsule())
+                            }
+                            .accessibilityLabel("캘린더, \(chosen?.name ?? "기본 캘린더")")
+                        }
+                    }
+                }
                 Button {
                     Task { await save() }
                 } label: {
@@ -247,6 +315,7 @@ struct NewEventSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("취소") { dismiss() } } }
             .onAppear {
+                if calendarId == nil { calendarId = CalendarChoice.defaultChoice(calendars) }
                 // Start on the selected day at the next whole hour, one hour long.
                 var cal = Calendar(identifier: .gregorian); cal.timeZone = Format.seoul
                 let hour = cal.component(.hour, from: Date()) + 1
@@ -270,13 +339,51 @@ struct NewEventSheet: View {
                                    "start": allDay ? Format.ymd(start) : iso.string(from: start)]
         if !allDay { body["end"] = iso.string(from: end) }
         if !place.trimmingCharacters(in: .whitespaces).isEmpty { body["place"] = place.trimmingCharacters(in: .whitespaces) }
+        // Only when there was a choice: with one calendar the Mac picks its main one, as before.
+        if CalendarChoice.needsPicker(calendars), let calendarId { body["calendar"] = calendarId }
         do {
-            _ = try await client.viewAction(Ack.self, "calendar", "add", json: body)
-            model.toast = "캘린더에 넣었어요"
+            let ack = try await client.viewAction(Ack.self, "calendar", "add", json: body)
+            if let name = ack.calendar, !name.isEmpty { model.toast = "‘\(name)’ 캘린더에 넣었어요" } else { model.toast = "캘린더에 넣었어요" }
             await done(Format.ymd(start))
             dismiss()
         } catch {
             model.toast = error.friendly
+        }
+    }
+}
+
+/// §36: a calendar's color. The main calendar keeps the app's blue; green stays for 한 일.
+enum CalendarTint {
+    static let palette: [Color] = [.accentColor, .orange, .purple, .pink, .teal, .indigo, .brown, .red]
+    static func color(_ cal: CalendarView.CalendarInfo) -> Color { palette[CalendarChoice.colorIndex(cal) % palette.count] }
+}
+
+/// Lays children left to right and wraps to the next line when they don't fit (the calendar legend).
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, line: CGFloat = 0, widest: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.init(width: width, height: nil))
+            if x > 0, x + s.width > width { y += line + lineSpacing; x = 0; line = 0 }
+            x += s.width + spacing
+            line = max(line, s.height)
+            widest = max(widest, x - spacing)
+        }
+        return CGSize(width: proposal.width ?? widest, height: y + line)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, line: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.init(width: bounds.width, height: nil))
+            if x > bounds.minX, x + s.width > bounds.maxX { y += line + lineSpacing; x = bounds.minX; line = 0 }
+            v.place(at: CGPoint(x: x, y: y), proposal: .init(width: min(s.width, bounds.width), height: s.height))
+            x += s.width + spacing
+            line = max(line, s.height)
         }
     }
 }

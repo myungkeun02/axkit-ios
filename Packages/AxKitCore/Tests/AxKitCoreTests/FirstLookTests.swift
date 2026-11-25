@@ -245,3 +245,66 @@ final class BlockRowMessageTests: XCTestCase {
         XCTAssertEqual(rows[2].trailing, nil)
     }
 }
+
+final class CalendarChoiceTests: XCTestCase {
+    private let json = """
+    {"month":"2026-11","days":[{"date":"2026-11-25","events":[
+      {"id":"a","title":"직원 회의","start":"2026-11-25T01:00:00Z","calendar":"모아카페","account":"me@example.com"},
+      {"id":"b","title":"치과","start":"2026-11-25T09:00:00Z"}],"done":[]}],
+     "calendars":[
+      {"id":"cafe","name":"모아카페","primary":false,"writable":true},
+      {"id":"holiday","name":"대한민국의 휴일","writable":false},
+      {"id":"me","name":"내 캘린더","primary":true,"writable":true},
+      {"name":"id 없음"}],
+     "calendarsLimited":true}
+    """
+
+    func testDecodesCalendarsAndSkipsBrokenOnes() throws {
+        let v = try EventDecoding.decoder.decode(CalendarView.self, from: Data(json.utf8))
+        XCTAssertEqual(v.calendars?.map(\.id), ["cafe", "holiday", "me"])
+        XCTAssertEqual(v.calendarsLimited, true)
+        XCTAssertEqual(v.days[0].events[0].calendar, "모아카페")
+        XCTAssertEqual(v.days[0].events[0].account, "me@example.com")
+        XCTAssertNil(v.days[0].events[1].calendar)
+    }
+
+    func testOlderMacDecodesWithoutNewFields() throws {
+        let v = try EventDecoding.decoder.decode(CalendarView.self, from: Data(#"{"month":"2026-11","days":[]}"#.utf8))
+        XCTAssertNil(v.calendars)
+        XCTAssertFalse(CalendarChoice.needsPicker(v.calendars))
+        XCTAssertTrue(CalendarChoice.legend(v.calendars).isEmpty)
+        XCTAssertNil(CalendarChoice.defaultChoice(v.calendars))
+    }
+
+    func testPickerIsWritableOnlyPrimaryFirst() throws {
+        let v = try EventDecoding.decoder.decode(CalendarView.self, from: Data(json.utf8))
+        XCTAssertEqual(CalendarChoice.writable(v.calendars).map(\.id), ["me", "cafe"])
+        XCTAssertEqual(CalendarChoice.defaultChoice(v.calendars), "me")
+        XCTAssertTrue(CalendarChoice.needsPicker(v.calendars))
+        let one = [CalendarView.CalendarInfo(id: "me", name: "내", primary: true, writable: true),
+                   CalendarView.CalendarInfo(id: "h", name: "휴일", writable: false)]
+        XCTAssertFalse(CalendarChoice.needsPicker(one))
+        XCTAssertEqual(CalendarChoice.legend(one).map(\.id), ["me", "h"])
+    }
+
+    func testColorsAreStableAndPrimaryIsBlue() {
+        let a = CalendarView.CalendarInfo(id: "cafe-123@group.calendar.google.com", name: "모아카페")
+        XCTAssertEqual(CalendarChoice.colorIndex(a), CalendarChoice.colorIndex(a))
+        XCTAssertNotEqual(CalendarChoice.colorIndex(a), 0)
+        XCTAssertEqual(CalendarChoice.colorIndex(.init(id: "x", name: "내", primary: true)), 0)
+    }
+
+    func testEventMatchesCalendarByNameThenAccount() {
+        let cals = [CalendarView.CalendarInfo(id: "1", name: "개인", account: "a@x.com"),
+                    CalendarView.CalendarInfo(id: "2", name: "개인", account: "b@x.com")]
+        XCTAssertEqual(CalendarChoice.info(name: "개인", account: "b@x.com", in: cals)?.id, "2")
+        XCTAssertEqual(CalendarChoice.info(name: "개인", account: nil, in: cals)?.id, "1")
+        XCTAssertNil(CalendarChoice.info(name: "회사", account: nil, in: cals))
+        XCTAssertEqual(CalendarChoice.label(cals[1], among: cals), "개인 · b@x.com")
+    }
+
+    func testTodayEventCalendar() throws {
+        let t = try EventDecoding.decoder.decode(TodayView.self, from: Data(#"{"date":"2026-11-25","events":[{"title":"회의","start":"2026-11-25T01:00:00Z","calendar":"한빛랩"}]}"#.utf8))
+        XCTAssertEqual(t.events?.first?.calendar, "한빛랩")
+    }
+}

@@ -118,7 +118,13 @@ struct TodaySheet: View {
                             HStack(alignment: .firstTextBaseline, spacing: 12) {
                                 Text(e.allDay == true ? "종일" : ISODates.parse(e.start).map { Format.clock($0) } ?? "")
                                     .font(.subheadline.monospacedDigit()).foregroundStyle(.secondary).frame(width: 76, alignment: .leading)
-                                Text(ChatText.preview(e.title, limit: 80))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(ChatText.preview(e.title, limit: 80))
+                                    // §36: which calendar, when the owner has more than one.
+                                    if let cal = e.calendar, !cal.isEmpty {
+                                        Text(verbatim: cal).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                }
                             }
                         }
                     } else {

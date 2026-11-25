@@ -241,6 +241,22 @@ function documentDetail(id) {
 }
 
 const addedEvents = [];
+// §36: CALENDARS=one (older Mac / single calendar: no calendar fields) · limited (only the main one is readable).
+const calendarMode = process.env.CALENDARS ?? 'many';
+const calendarList = calendarMode === 'many' ? [
+  { id: 'me@example.com', name: '내 캘린더', primary: true, writable: true, account: 'me@example.com' },
+  { id: 'cafe-123@group.calendar.google.com', name: '모아카페', primary: false, writable: true, description: '매장 일정', account: 'me@example.com' },
+  { id: 'hanbit-456@group.calendar.google.com', name: '한빛랩', primary: false, writable: true, description: '회사 일정', account: 'me@example.com' },
+  { id: 'ko.south_korea#holiday@group.v.calendar.google.com', name: '대한민국의 휴일', primary: false, writable: false, account: 'me@example.com' },
+] : calendarMode === 'limited' ? [{ id: 'me@example.com', name: '내 캘린더', primary: true, writable: true }] : null;
+function calendarOf(title) {
+  if (calendarMode !== 'many') return undefined;
+  if (/카페|원두/.test(title)) return '모아카페';
+  if (/투자|앱 2.0/.test(title)) return '한빛랩';
+  if (/결제일/.test(title)) return '대한민국의 휴일';
+  return '내 캘린더';
+}
+
 function calendarMonth(month) {
   const [y, m] = month.split('-').map(Number);
   const daysIn = new Date(Date.UTC(y, m, 0)).getUTCDate();
@@ -277,13 +293,17 @@ function calendarMonth(month) {
         done.push({ id: `done-${date}-${i}`, title, at: iso(kstAt(date, 9 + i * 3, 10)), bot: botId === 'main' ? { id: 'main', name: '비서' } : { id: botId, name: botName }, detail: `${botName}${/[가-힣]/.test(botName.slice(-1)) && (botName.slice(-1).charCodeAt(0) - 0xac00) % 28 ? '이' : '가'} 한 일이에요.` });
       }
     }
+    for (const e of events) if (!e.calendar) e.calendar = calendarOf(e.title);
     days.push({ date, events, done });
   }
   for (const ev of addedEvents) {
     const d = days.find((x) => x.date === kstYmd(new Date(ev.start)));
     if (d) { d.events.push(ev); d.events.sort((x, y) => x.start.localeCompare(y.start)); }
   }
-  return { month, timezone: 'Asia/Seoul', days };
+  const out = { month, timezone: 'Asia/Seoul', days };
+  if (calendarList) out.calendars = calendarList;
+  if (calendarMode === 'limited') out.calendarsLimited = true;
+  return out;
 }
 
 const jobs = {
@@ -961,7 +981,7 @@ async function app(req, res, path, url) {
     const [, name, action] = viewMatch;
     if (m === 'GET' && !action) {
       switch (name) {
-        case 'today': return send(res, 200, view(name, { date: today(), events: calendarMonth(today().slice(0, 7)).days.find((d) => d.date === today())?.events.map((e) => ({ title: e.title, start: e.start, end: e.end, allDay: e.allDay })) ?? [], todos: [{ text: '투자 자료 마지막 확인', due: today() }, { text: '이점장 월급 이체', due: today() }], pendingCards: cards.size }));
+        case 'today': return send(res, 200, view(name, { date: today(), events: calendarMonth(today().slice(0, 7)).days.find((d) => d.date === today())?.events.map((e) => ({ title: e.title, start: e.start, end: e.end, allDay: e.allDay, calendar: e.calendar })) ?? [], todos: [{ text: '투자 자료 마지막 확인', due: today() }, { text: '이점장 월급 이체', due: today() }], pendingCards: cards.size }));
         case 'approvals': return send(res, 200, view(name, { cards: [...cards.values()] }));
         case 'bots': return send(res, 200, view(name, { main: { name: '비서', subtitle: '무엇이든 먼저 여기에 말하세요' }, groups }));
         case 'docgraph': {
@@ -1142,9 +1162,12 @@ async function app(req, res, path, url) {
           start = new Date(body.start); end = body.end ? new Date(body.end) : undefined;
           if (isNaN(start) || (end && (isNaN(end) || end < start))) return send(res, 400, { ok: false, error: 'shape' });
         }
-        const ev = { id: `ev-new-${Date.now()}`, title, start: iso(start), end: end && iso(end), allDay: body.allDay === true, place: body.place };
+        const cal = body.calendar == null ? calendarList?.find((c) => c.primary) : calendarList?.find((c) => c.id === body.calendar || c.name === body.calendar);
+        if (body.calendar != null && (!cal || cal.writable === false)) return send(res, 400, { ok: false, error: 'calendar', message: '그 캘린더에는 넣을 수 없어요' });
+        console.log(`calendar add: ${title} → ${cal?.name ?? '(기본)'}`);
+        const ev = { id: `ev-new-${Date.now()}`, title, start: iso(start), end: end && iso(end), allDay: body.allDay === true, place: body.place, calendar: calendarMode === 'many' ? cal?.name : undefined };
         addedEvents.push(ev);
-        return send(res, 200, { ok: true, view: name, action, data: { id: ev.id } });
+        return send(res, 200, { ok: true, view: name, action, data: { id: ev.id, calendar: calendarMode === 'many' ? cal?.name : undefined } });
       }
       if (name === 'autonomy' && action === 'revoke') {
         const before = autonomy.rules.length;
