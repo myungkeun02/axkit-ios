@@ -262,13 +262,26 @@ public final class APIClient: @unchecked Sendable {
         return inner
     }
 
-    public func share(_ bytes: Data, name: String, contentType: String) async throws -> SendResult {
+    /// `channel`: a team or bot room (§37 `x-channel`, only when `features` lists `share-rooms`); nil = the main chat.
+    public func share(_ bytes: Data, name: String, contentType: String, channel: String? = nil) async throws -> SendResult {
         var request = request("share", method: "POST")
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        if let channel, !channel.isEmpty { request.setValue(channel, forHTTPHeaderField: "x-channel") }
         request.setValue(name.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "shared", forHTTPHeaderField: "X-File-Name")
         request.httpBody = bytes
         let data = try await send(request)
         do { return try JSONDecoder().decode(SendResult.self, from: data) } catch { throw APIError.decoding }
+    }
+
+    /// 휴대폰 신호: `POST {base}/m/v1/ingest` (not under `app/`), same token. Items from `PhoneSignals`.
+    public func ingest(_ items: [[String: Any]]) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("m/v1/ingest"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 25
+        authorize(&request)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: PhoneSignals.body(items))
+        _ = try await send(request)
     }
 
     /// `POST location {lat, lng, accuracyM?}`: where the phone is now (only when `features` lists `location`).

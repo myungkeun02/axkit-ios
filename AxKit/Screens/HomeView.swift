@@ -46,6 +46,7 @@ struct HomeView: View {
                             .navigationBarTitleDisplayMode(.inline)
                             .toolbar {
                                 ToolbarItem(placement: .principal) { RoomHeader(room: room) }
+                                ToolbarItem(placement: .topBarTrailing) { ShortViewToggle(room: room) }
                             }
                     }
                 }

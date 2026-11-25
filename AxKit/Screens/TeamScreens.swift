@@ -45,8 +45,13 @@ struct AddTeamSheet: View {
     @State private var staffTier = "B"
     @State private var reviewerTier = "S"
     @State private var saving = false
+    /// §37: one text box (the Mac's model builds the team); the old form is "직접 자세히 설정".
+    @State private var detailed = false
+    @State private var text = ""
+    @State private var built: TeamText.Built?
 
     private struct Made: Decodable { var teamId: String; var channel: String }
+    private var fromText: Bool { model.capabilities.hasAction("bots", "createTeamFromText") }
 
     private var ready: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty && (groupId != "" ? true : !newGroup.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -54,6 +59,117 @@ struct AddTeamSheet: View {
 
     var body: some View {
         NavigationStack {
+            Group {
+                if let built { builtPage(built) }
+                else if fromText && !detailed { textPage }
+                else { formPage }
+            }
+            .navigationTitle(built == nil ? "팀 추가" : "팀을 만들었어요")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: built == nil ? .cancellationAction : .confirmationAction) {
+                    Button(built == nil ? "취소" : "닫기") { dismiss() }
+                }
+            }
+            .onAppear { if groupId == "", let first = model.bots?.groups.first { groupId = first.id } }
+            .interactiveDismissDisabled(saving)
+        }
+    }
+
+    // MARK: one text
+
+    private var textPage: some View {
+        Page {
+            Panel {
+                VStack(alignment: .leading, spacing: 10) {
+                    CardHeader(title: "어떤 팀이 필요한지 적어 주세요",
+                               subtitle: "하는 일, 사람·역할, 말투, 채널, 일정, 지킬 규칙을 한 번에 적으면 비서가 팀을 꾸려요.")
+                    ZStack(alignment: .topLeading) {
+                        if text.isEmpty {
+                            Text(TeamText.placeholder).foregroundStyle(.tertiary).padding(.horizontal, 5).padding(.vertical, 8)
+                                .allowsHitTesting(false)
+                        }
+                        TextEditor(text: $text)
+                            .frame(minHeight: 220)
+                            .scrollContentBackground(.hidden)
+                    }
+                    .font(.body)
+                    .padding(8)
+                    .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color(.separator)))
+                    HStack {
+                        if (model.bots?.groups.count ?? 0) > 1 {
+                            Picker("어느 회사", selection: $groupId) {
+                                ForEach(model.bots?.groups ?? []) { Text($0.label).tag($0.id) }
+                            }
+                            .pickerStyle(.menu)
+                        }
+                        Spacer()
+                        Text("\(text.count) / 6000").font(.caption.monospacedDigit()).foregroundStyle(text.count > TeamText.max ? .red : .secondary)
+                    }
+                    Text("보내기·결제·삭제는 어떤 팀이든 늘 결재를 받아요.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Button { Task { await buildFromText() } } label: {
+                HStack {
+                    Text(saving ? "팀을 꾸리는 중이에요…" : "만들기")
+                    if saving { Spacer(); ProgressView().tint(.white) }
+                }
+            }
+            .buttonStyle(.action(.primary))
+            .disabled(saving || TeamText.problem(text) != nil)
+            Button("직접 자세히 설정") { detailed = true }
+                .buttonStyle(.action(.secondary))
+                .disabled(saving)
+        }
+    }
+
+    private func builtPage(_ team: TeamText.Built) -> some View {
+        Page {
+            Panel {
+                VStack(alignment: .leading, spacing: 6) {
+                    CardHeader(title: team.name, subtitle: team.purpose.isEmpty ? nil : team.purpose)
+                    if team.briefKept {
+                        Label("적어 주신 글은 팀장의 지시로 넣어 뒀어요. AI가 덮어쓰지 않아요.", systemImage: "checkmark.circle")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Panel {
+                VStack(alignment: .leading, spacing: 4) {
+                    CardHeader(title: "팀원 \(team.members.count)명")
+                    CardList(items: team.members) { m in
+                        HStack(spacing: 12) {
+                            BotAvatar(icon: nil, name: m.name, size: 32, avatar: model.bots?.bot(id: m.id)?.avatar, status: nil)
+                            CardRow(title: m.name, detail: m.role.isEmpty ? nil : m.role) { EmptyView() }
+                        }
+                    }
+                }
+            }
+            Text("이름·하는 일·팀원 역할은 팀 방 위쪽 팀 이름을 눌러 바로 고칠 수 있어요.")
+                .font(.footnote).foregroundStyle(.secondary)
+            Button("팀 방 열기") { dismiss(); opened(team.channel) }.buttonStyle(.action(.primary))
+        }
+    }
+
+    private func buildFromText() async {
+        guard let client = model.client, TeamText.problem(text) == nil else { return }
+        saving = true
+        defer { saving = false }
+        var body: [String: Any] = ["text": text.trimmingCharacters(in: .whitespacesAndNewlines)]
+        if !groupId.isEmpty { body["group"] = groupId }
+        do {
+            let team = try await client.viewAction(TeamText.Built.self, "bots", "createTeamFromText", json: body)
+            await model.refreshBasics()
+            withAnimation { built = team }
+        } catch {
+            model.toast = error.friendly
+        }
+    }
+
+    // MARK: the detailed form
+
+    private var formPage: some View {
             Page {
                 Panel {
                     VStack(alignment: .leading, spacing: 12) {
@@ -105,11 +221,6 @@ struct AddTeamSheet: View {
                 .buttonStyle(.action(.primary))
                 .disabled(!ready || saving)
             }
-            .navigationTitle("팀 추가")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("취소") { dismiss() } } }
-            .onAppear { if groupId == "", let first = model.bots?.groups.first { groupId = first.id } }
-        }
     }
 
     private func save() async {
@@ -142,14 +253,25 @@ struct AddTeamSheet: View {
 
 /// 팀 설정: who is in the team and each role's AI grade (changeable any time).
 struct TeamSheet: View {
-    var team: BotsView.Team
+    /// The team as it was when opened; `team` below is the live one (renames land at once).
+    var opened: BotsView.Team
+    init(team: BotsView.Team) { opened = team }
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var tiers: [String: String] = [:]
+    @State private var name = ""
+    @State private var purpose = ""
+    @State private var renaming = false
 
     private struct Ack: Decodable {}
 
+    private var team: BotsView.Team { model.bots?.allTeams.first { $0.id == opened.id } ?? opened }
     private var members: [BotsView.Bot] { model.bots?.members(of: team) ?? [] }
+    private var canRename: Bool { model.capabilities.hasAction("bots", "renameTeam") }
+    private var renamed: Bool {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines), p = purpose.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !n.isEmpty && n.count <= 40 && p.count <= 200 && (n != team.name || p != (team.purpose ?? ""))
+    }
     private let order = ["lead", "staff", "reviewer"]
     private func rankWords(_ rank: String?) -> String {
         switch rank { case "lead": "팀장"; case "reviewer": "검수"; default: "직원" }
@@ -166,18 +288,33 @@ struct TeamSheet: View {
                         }
                     }
                 }
+                if canRename {
+                    Panel {
+                        VStack(alignment: .leading, spacing: 10) {
+                            CardHeader(title: "팀 이름과 하는 일", subtitle: "바꾸면 바로 반영돼요.")
+                            TextField("팀 이름", text: $name).font(.headline)
+                            TextField("하는 일", text: $purpose, axis: .vertical).lineLimit(1...4)
+                            if renamed {
+                                Button { Task { await rename() } } label: {
+                                    HStack { Text("저장"); if renaming { Spacer(); ProgressView().tint(.white) } }
+                                }
+                                .buttonStyle(.action(.primary))
+                                .disabled(renaming)
+                            }
+                        }
+                    }
+                }
                 Panel {
                     VStack(alignment: .leading, spacing: 4) {
-                        CardHeader(title: "팀원 \(members.count)명", subtitle: team.purpose)
+                        CardHeader(title: "팀원 \(members.count)명", subtitle: canRename ? "눌러서 이름·역할·팀을 바꿔요" : team.purpose)
                         CardList(items: members) { bot in
                             NavigationLink { BotInstructionsScreen(botId: bot.id) } label: {
                                 HStack(spacing: 12) {
                                     BotAvatar(icon: nil, name: bot.name, size: 32, avatar: bot.avatar, status: bot.status)
-                                    CardRow(title: bot.name, detail: rankWords(bot.rank) + " · 일하는 방식 보기") {
-                                        HStack(spacing: 8) {
-                                            Text(bot.tier.map { "\($0) 등급" } ?? "").foregroundStyle(.secondary)
-                                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                                        }
+                                    // The grade and the AI it runs on ("A 등급 · Claude Opus · …"); older Macs: the grade only.
+                                    CardRow(title: bot.name, detail: [rankWords(bot.rank), bot.role, bot.gradeLine.isEmpty ? nil : bot.gradeLine]
+                                        .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")) {
+                                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                                     }
                                 }
                             }
@@ -199,7 +336,22 @@ struct TeamSheet: View {
             .navigationTitle(team.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("닫기") { dismiss() } } }
+            .onAppear { name = team.name; purpose = team.purpose ?? "" }
         }
+    }
+
+    private func rename() async {
+        renaming = true
+        defer { renaming = false }
+        var body: [String: Any] = ["teamId": team.id, "name": name.trimmingCharacters(in: .whitespacesAndNewlines)]
+        let p = purpose.trimmingCharacters(in: .whitespacesAndNewlines)
+        if p != (team.purpose ?? "") { body["purpose"] = p }
+        do {
+            _ = try await model.client?.viewAction(Ack.self, "bots", "renameTeam", json: body)
+            await model.refreshBasics()
+            name = team.name; purpose = team.purpose ?? ""
+            model.toast = "팀 이름을 바꿨어요"
+        } catch { model.toast = error.friendly }
     }
 
     private func save(_ rank: String, _ tier: String) async {
@@ -229,7 +381,9 @@ struct RoomHeader: View {
                     AvatarStack(names: members.map(\.name), size: 24, working: members.first?.status == "working")
                     VStack(alignment: .leading, spacing: 0) {
                         Text(team.name).font(.headline).foregroundStyle(.primary)
-                        Text("팀원 \(members.count)명 · 설정").font(.caption2).foregroundStyle(.secondary)
+                        let models = BotsView.teamModels(members)
+                        Text("팀원 \(members.count)명" + (models.isEmpty ? "" : " · \(models)") + " · 설정")
+                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
             }
@@ -302,9 +456,10 @@ struct BotInstructionsScreen: View {
                 Panel {
                     HStack(spacing: 12) {
                         BotAvatar(icon: nil, name: bot.name, size: 44, avatar: bot.avatar, status: bot.status)
-                        CardHeader(title: bot.name, subtitle: [bot.role, bot.tier.map { "\($0) 등급" }].compactMap { $0 }.joined(separator: " · "))
+                        CardHeader(title: bot.name, subtitle: [bot.role, bot.gradeLine.isEmpty ? nil : bot.gradeLine].compactMap { $0 }.joined(separator: " · "))
                     }
                 }
+                BotEditPanel(bot: bot)
                 Panel {
                     VStack(alignment: .leading, spacing: 10) {
                         CardHeader(title: authorWords.0, subtitle: authorWords.1)
@@ -362,5 +517,116 @@ struct BotInstructionsScreen: View {
         } catch {
             model.toast = error.friendly
         }
+    }
+}
+
+/// §37 바로 고치기: a member's name and role, and which team it is in (not for a team lead). Applied at once.
+private struct BotEditPanel: View {
+    var bot: BotsView.Bot
+    @Environment(AppModel.self) private var model
+    @State private var name = ""
+    @State private var role = ""
+    @State private var saving = false
+    @State private var moving = false
+
+    private struct Ack: Decodable {}
+    private var canEdit: Bool { model.capabilities.hasAction("bots", "editBot") }
+    private var canMove: Bool { model.capabilities.hasAction("bots", "moveBot") && bot.rank != "lead" }
+    private var changed: Bool {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines), r = role.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !n.isEmpty && n.count <= 40 && (r.isEmpty || (2...120).contains(r.count)) && (n != bot.name || (!r.isEmpty && r != (bot.role ?? "")))
+    }
+    private var currentTeam: String? {
+        for g in model.bots?.groups ?? [] { if let t = (g.teams ?? []).first(where: { $0.id == bot.team }) { return "\(g.label) · \(t.name)" } }
+        return nil
+    }
+    /// Teams it can move to: every other team, grouped by company.
+    private var otherTeams: [(BotsView.Group, BotsView.Team)] {
+        (model.bots?.groups ?? []).flatMap { g in (g.teams ?? []).filter { $0.id != bot.team }.map { (g, $0) } }
+    }
+
+    var body: some View {
+        if canEdit || canMove {
+            Panel {
+                VStack(alignment: .leading, spacing: 10) {
+                    if canEdit {
+                        CardHeader(title: "이름과 역할", subtitle: "바꾸면 바로 반영돼요.")
+                        TextField("이름", text: $name).font(.headline)
+                        TextField("역할 (예: 대본을 써요)", text: $role, axis: .vertical).lineLimit(1...3)
+                        if changed {
+                            Button { Task { await save() } } label: {
+                                HStack { Text("저장"); if saving { Spacer(); ProgressView().tint(.white) } }
+                            }
+                            .buttonStyle(.action(.primary))
+                            .disabled(saving)
+                        }
+                    }
+                    if canMove, !otherTeams.isEmpty {
+                        if canEdit { Divider() }
+                        if let now = currentTeam {
+                            Text("지금 팀: \(now)").font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Menu {
+                            ForEach(otherTeams, id: \.1.id) { group, team in
+                                Button("\(group.label) · \(team.name)") { Task { await move(to: team) } }
+                            }
+                        } label: {
+                            HStack {
+                                Label("다른 팀으로 옮기기", systemImage: "arrow.left.arrow.right")
+                                Spacer()
+                                if moving { ProgressView() } else { Image(systemName: "chevron.up.chevron.down").font(.footnote).foregroundStyle(.tertiary) }
+                            }
+                            .font(.subheadline.weight(.semibold))
+                        }
+                        .disabled(moving)
+                    } else if model.capabilities.hasAction("bots", "moveBot"), bot.rank == "lead" {
+                        Text("팀장은 다른 팀으로 옮길 수 없어요.").font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .onAppear { name = bot.name; role = bot.role ?? "" }
+            .onChange(of: bot) { _, b in if !saving { name = b.name; role = b.role ?? "" } }
+        }
+    }
+
+    private func save() async {
+        saving = true
+        defer { saving = false }
+        var body: [String: Any] = ["botId": bot.id]
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines), r = role.trimmingCharacters(in: .whitespacesAndNewlines)
+        if n != bot.name { body["name"] = n }
+        if !r.isEmpty, r != (bot.role ?? "") { body["role"] = r }
+        do {
+            _ = try await model.client?.viewAction(Ack.self, "bots", "editBot", json: body)
+            await model.refreshBasics()
+            model.toast = "바꿨어요"
+        } catch { model.toast = error.friendly }
+    }
+
+    private func move(to team: BotsView.Team) async {
+        moving = true
+        defer { moving = false }
+        do {
+            _ = try await model.client?.viewAction(Ack.self, "bots", "moveBot", json: ["botId": bot.id, "teamId": team.id])
+            await model.refreshBasics()
+            model.toast = "\(bot.name) → \(team.name), 옮겼어요"
+        } catch { model.toast = error.friendly }
+    }
+}
+
+/// 짧게 보기 in a team or bot room: off = every line in order with its speaker; on = replies tucked in, long runs folded.
+struct ShortViewToggle: View {
+    var room: String
+    @Environment(AppModel.self) private var model
+    var body: some View {
+        let on = model.shortRooms.contains(room)
+        Menu {
+            Toggle(isOn: Binding(get: { on }, set: { v in if v { model.shortRooms.insert(room) } else { model.shortRooms.remove(room) } })) {
+                Label("짧게 보기", systemImage: "text.append")
+            }
+        } label: {
+            Image(systemName: on ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+        }
+        .accessibilityLabel(on ? "짧게 보는 중" : "모든 대화 보는 중")
     }
 }

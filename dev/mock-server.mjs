@@ -60,6 +60,38 @@ const who = (b) => ({ id: b.id, name: b.name });
 /** Bot-to-bot line in plain words (the A2A payload itself never leaves the Mac). */
 const talk = (ch, fromId, toId, text, at) => append({ type: 'message', role: 'assistant', channel: ch, author: who(botById(fromId)), ...(toId ? { to: who(botById(toId)) } : {}), text }, at);
 
+// d219cb3: each bot's AI model by tier (C has none here; MODELS=none = an older Mac that sends none at all).
+const MODEL_BY_TIER = { S: 'Claude Opus · Claude Code 구독', A: 'Claude Opus · Claude Code 구독', B: 'Claude Sonnet 5.5 · Claude' };
+const botsGroups = () => groups.map((g) => ({ ...g, bots: g.bots.map((b) => (process.env.MODELS !== 'none' && MODEL_BY_TIER[b.tier] ? { ...b, model: MODEL_BY_TIER[b.tier] } : b)) }));
+const JOBS = [['기획', '주제와 구성을 잡아요'], ['대본', '말할 내용과 자막을 써요'], ['촬영', '찍을 장면 목록을 만들어요'], ['편집', '편집자에게 줄 편집 지시서를 써요'],
+  ['썸네일', '썸네일과 제목을 뽑아요'], ['디자인', '시안과 이미지를 만들어요'], ['마케팅', '알릴 글과 채널을 챙겨요'], ['조사', '자료와 사례를 모아요']];
+
+// §38 드라이브 폴더: accounts → 내 드라이브 / 공유 문서함 → folders → files (folder rows carry `query`, files `message`).
+const DRIVE = {
+  'me:root': { path: ['내 드라이브'], folders: [['f-plan', '기획'], ['f-money', '회계']], files: [['회사 소개서', '11월 20일']] },
+  'f-plan': { path: ['내 드라이브', '기획'], folders: [['f-app2', '앱 2.0']], files: [['신메뉴 아이디어', '11월 24일'], ['인스타 일정표', '11월 22일']] },
+  'f-app2': { path: ['내 드라이브', '기획', '앱 2.0'], folders: [], files: [['출시 체크리스트', '오늘 09:12']] },
+  'f-money': { path: ['내 드라이브', '회계'], folders: [], files: [['11월 매출 정리', '오늘 14:05'], ['견적서 초안', '오늘 10:30']] },
+  'shared:root': { path: ['공유 문서함'], folders: [['f-partner', '거래처 공유']], files: [['근무표 (옛 양식)', '11월 17일']] },
+  'f-partner': { path: ['공유 문서함', '거래처 공유'], folders: [], files: [['납품 계약서', '11월 3일']] },
+};
+function driveTree(q) {
+  const source = q.get('source');
+  if (!source) {
+    return { title: '드라이브', blocks: [{ kind: 'text', text: '📁 폴더' }, { kind: 'list', rows: [
+      { title: '내 드라이브', detail: 'me@example.com', query: { mode: 'tree', source: 'me', folder: 'root' } },
+      { title: '공유 문서함', detail: '나에게 공유된 파일', query: { mode: 'tree', source: 'shared', folder: 'root' } },
+      { title: '처음 화면으로', detail: '최근에 바뀐 파일', query: {} }] }] };
+  }
+  const key = q.get('folder') === 'root' ? `${source}:root` : q.get('folder');
+  const f = DRIVE[key];
+  if (!f) return { title: '드라이브', blocks: [{ kind: 'note', text: '그 폴더를 찾지 못했어요.' }] };
+  return { title: f.path.at(-1), blocks: [
+    { kind: 'text', text: `📁 ${f.path.join(' › ')}` },
+    ...(f.folders.length ? [{ kind: 'list', title: `폴더 ${f.folders.length}개`, rows: f.folders.map(([id, n]) => ({ title: n, query: { mode: 'tree', source, folder: id, path: [...f.path, n].join('/') } })) }] : []),
+    { kind: 'list', title: `파일 ${f.files.length}개`, rows: f.files.map(([n, when]) => ({ title: n, trailing: when, message: `드라이브의 "${n}"을 요약할지, 지식 문서에 반영할지 물어봐 줘` })) }] };
+}
+
 // ---------- event log ----------
 const events = [];
 // Grows across restarts (seconds since 2026), like the real server's persisted log.
@@ -150,6 +182,8 @@ function effectLabel(e) { return { read: '읽기', write: '저장', send: '보�
       { id: 'mail:9am', label: '내일 아침 9시에 예약', detail: '출근 시간에 맞춰 보내요' },
       { id: 'mail:discount', label: '10% 깎아서 보내기', detail: '새 견적서를 먼저 보여 드릴게요' },
       { id: 'mail:no', label: '보내지 않기', tone: 'danger' }] }, ['보내기'], 4, t(20));
+  append({ type: 'notice', kind: 'digest', text: '저녁 정리 · 3건\n1. 박대표님 메일: 다음 주 미팅 시간 물어봄\n2. 쿠팡 택배 내일 도착\n3. 카드 결제 4건, 합계 12만 3천원',
+    choices: [{ id: 'digest:1', label: '1번 자세히' }, { id: 'digest:2', label: '2번 자세히' }, { id: 'digest:3', label: '3번 자세히' }] }, t(12));
   say('요청한 파일이에요: 견적서_11월.pdf', { attachments: [{ id: 'doc_quote.pdf', name: '견적서_11월.pdf', contentType: 'application/pdf', size: 48213, url: 'files/doc_quote.pdf' }] }, t(8));
   say('오늘 오후 3시 투자사 미팅 자료는 문서 탭 "한빛랩 › 투자" 에 정리해 뒀어요.', { choices: [{ id: 'brief:open', label: '요약해 줘' }, { id: 'brief:later', label: '나중에' }] }, t(10));
 })();
@@ -701,9 +735,9 @@ const view = (name, data) => ({ ok: true, view: name, version: 1, data });
 
 const capabilities = {
   ok: true, protocol: 1, server: 'ax-kit-mock',
-  features: ['chat', 'cards', 'notices', 'share', 'stream', 'events', 'views', 'channels', 'card-options', 'card-reply', 'delegation', 'bots', 'recordings', 'bot-teams', 'push', 'routines', 'file-changes', 'browser-live', 'activity', 'projects', 'team-plan', 'first-look', 'dictation', 'location'],
+  features: ['chat', 'cards', 'notices', 'share', 'stream', 'events', 'views', 'channels', 'card-options', 'card-reply', 'delegation', 'bots', 'recordings', 'bot-teams', 'push', 'routines', 'file-changes', 'browser-live', 'activity', 'projects', 'team-plan', 'first-look', 'dictation', ...(process.env.LOCATION === 'off' ? [] : ['location']), ...(process.env.SHARE_ROOMS === 'off' ? [] : ['share-rooms'])],
   views: [
-    { name: 'today', version: 1, actions: [] }, { name: 'approvals', version: 1, actions: [] }, { name: 'bots', version: 1, actions: ['createTeam', 'setTiers', 'meeting', 'setInstructions'] },
+    { name: 'today', version: 1, actions: [] }, { name: 'approvals', version: 1, actions: [] }, { name: 'bots', version: 1, actions: ['createTeam', 'setTiers', 'meeting', 'setInstructions', 'renameTeam', 'editBot', 'moveBot', 'createTeamFromText'] },
     { name: 'docgraph', version: 1, actions: [] }, { name: 'calendar', version: 1, actions: ['add'] }, { name: 'jobs', version: 1, actions: ['toggle'] },
     { name: 'spending', version: 1, actions: ['categorize', 'budget', 'add'] }, { name: 'usage', version: 1, actions: [] }, { name: 'providers', version: 1, actions: [] }, { name: 'autonomy', version: 1, actions: ['revoke'] }, { name: 'modeltiers', version: 1, actions: ['rank', 'purpose'] },
     { name: 'hardware', version: 1, actions: [] }, { name: 'recordings', version: 1, actions: [] }, { name: 'routines', version: 1, actions: ['toggle', 'remove'] }, { name: 'projects', version: 1, actions: ['save', 'refresh'] }, { name: 'team-plan', version: 1, actions: ['save', 'apply', 'decline'] }, { name: 'first-look', version: 1, actions: ['revise', 'apply', 'start'] }, { name: 'work', version: 1, actions: [] }, { name: 'people', version: 1, actions: ['edit'] }, { name: 'browser-live', version: 1, actions: ['start', 'tap', 'type', 'key', 'scroll', 'back', 'done'] }, { name: 'file-changes', version: 1, actions: [], ui: 'blocks', title: '파일 변경', icon: 'doc.badge.clock' }, { name: 'ways', version: 1, actions: [], ui: 'blocks', title: '알아 둔 사이트·방법', icon: 'globe' }, { name: 'parcel', version: 1, actions: [], title: '택배 조회', icon: 'shippingbox', ui: 'blocks' }, { name: 'drive', version: 1, actions: [], ui: 'blocks', title: '드라이브', icon: 'externaldrive' },
@@ -895,10 +929,12 @@ async function app(req, res, path, url) {
     if (body.remember === true && card.remember && state !== 'denied' && card.topic !== 'drive:save:meeting-notes') {
       autonomy.rules.unshift({ id: `rule-${Date.now()}`, label: card.remember.label.replace(/할게요$/, '하기'), detail: card.remember.detail, since: iso(now()), uses: 0 });
     }
+    // R3: card_closed.answer = the chosen option's name or the words written.
+    if (!answer && body.option) answer = label;
     append({ type: 'card_closed', cardId: id, state, ...(answer ? { answer } : {}), ...(card.channel ? { channel: card.channel } : {}) });
     const reply = answer ? `"${answer}"(으)로 할게요.` : state === 'denied' ? '알겠어요, 하지 않을게요.' : state === 'edit' ? '무엇을 고칠까요?' : `"${label}" 처리했어요.`;
     later(600, () => (card.channel ? botSay(card.channel, reply) : say(reply)));
-    return send(res, 200, { ok: true, state, reply });
+    return send(res, 200, { ok: true, state, reply, ...(answer ? { answer } : {}) });
   }
   if (m === 'POST' && path === 'push/register') {
     const body = (await readJson(req)) ?? {};
@@ -938,6 +974,15 @@ async function app(req, res, path, url) {
   if (m === 'POST' && path === 'share') {
     const bytes = await readBody(req);
     const name = decodeURIComponent(req.headers['x-file-name'] ?? 'shared');
+    // §37: x-channel puts the file in a team or bot room (400 for a room that doesn't exist).
+    const room = String(req.headers['x-channel'] ?? '').trim();
+    if (room) {
+      if (!knownChannel(room)) return send(res, 400, { ok: false, error: 'shape' });
+      console.log(`share → ${room}: ${name} ${bytes.length} bytes`);
+      const e = append({ type: 'message', role: 'owner', channel: room, text: `파일 ${name} (${Math.round(bytes.length / 1024)}KB)를 보냈어요` });
+      later(800, () => botSay(room, '받았어요. 팀에서 같이 볼게요.'));
+      return send(res, 200, { ok: true, seq: e.seq });
+    }
     const e = append({ type: 'message', role: 'owner', text: `파일 ${name} (${Math.round(bytes.length / 1024)}KB)를 보냈어요` });
     later(800, () => say('받았어요. 정리해서 문서에 넣어 둘게요.'));
     return send(res, 200, { ok: true, seq: e.seq });
@@ -983,7 +1028,7 @@ async function app(req, res, path, url) {
       switch (name) {
         case 'today': return send(res, 200, view(name, { date: today(), events: calendarMonth(today().slice(0, 7)).days.find((d) => d.date === today())?.events.map((e) => ({ title: e.title, start: e.start, end: e.end, allDay: e.allDay, calendar: e.calendar })) ?? [], todos: [{ text: '투자 자료 마지막 확인', due: today() }, { text: '이점장 월급 이체', due: today() }], pendingCards: cards.size }));
         case 'approvals': return send(res, 200, view(name, { cards: [...cards.values()] }));
-        case 'bots': return send(res, 200, view(name, { main: { name: '비서', subtitle: '무엇이든 먼저 여기에 말하세요' }, groups }));
+        case 'bots': return send(res, 200, view(name, { main: { name: '비서', subtitle: '무엇이든 먼저 여기에 말하세요' }, groups: botsGroups() }));
         case 'docgraph': {
           const doc = url.searchParams.get('doc');
           if (doc) return send(res, 200, view(name, { document: documentDetail(doc) }));
@@ -1013,7 +1058,9 @@ async function app(req, res, path, url) {
           { kind: 'text', text: '비서가 일할 때 먼저 찾아보는 사이트와, 해 본 적 있는 방법이에요.' },
           { kind: 'list', title: '사이트', rows: [{ title: 'tank.example.com', detail: '회사 관리 툴', trailing: '회사' }, { title: '쿠팡', detail: '생활용품 주문', trailing: '쇼핑' }] },
           { kind: 'list', title: '해 본 일', rows: [{ title: '원두 재주문', detail: '커피상회 사이트 · 결제 직전에 멈추고 물어봄', trailing: '3번' }] }] }));
-        case 'drive': return send(res, 200, view(name, { title: '드라이브', blocks: [
+        case 'drive': if (url.searchParams.get('mode') === 'tree') return send(res, 200, view(name, driveTree(url.searchParams)));
+          return send(res, 200, view(name, { title: '드라이브', blocks: [
+          { kind: 'list', rows: [{ title: '📁 폴더로 보기', detail: '내 드라이브 · 공유 문서함', query: { mode: 'tree' } }] },
           { kind: 'stat', title: '최근 30일 동안 바뀐 내 파일', value: '3건' },
           { kind: 'list', title: '오늘 · 2건', rows: [
             { title: '11월 매출 정리', detail: '모아카페 · me@example.com', trailing: '14:05', message: '드라이브의 "11월 매출 정리" 내용을 요약해 줘' },
@@ -1130,6 +1177,65 @@ async function app(req, res, path, url) {
         }
         return send(res, 200, { ok: true, view: name, action, data: { botId: bot.id, instructionsBy: bot.instructionsBy } });
       }
+      // §37 봇 화면에서 바로 고치기 (applied at once, no card).
+      if (name === 'bots' && action === 'renameTeam') {
+        const team = groups.flatMap((g) => g.teams).find((t) => t.id === body.teamId);
+        const n = String(body.name ?? '').trim();
+        if (!team) return send(res, 400, { ok: false, error: 'shape', message: '그런 팀이 없어요' });
+        if (!n || n.length > 40 || (body.purpose !== undefined && String(body.purpose).trim().length > 200)) return send(res, 400, { ok: false, error: 'shape' });
+        team.name = n;
+        if (body.purpose !== undefined) team.purpose = String(body.purpose).trim();
+        return send(res, 200, { ok: true, view: name, action, data: { teamId: team.id, name: n } });
+      }
+      if (name === 'bots' && action === 'editBot') {
+        const bot = botById(body.botId);
+        if (!bot) return send(res, 400, { ok: false, error: 'shape', message: '그런 봇이 없어요' });
+        const ok = (v, min, max) => typeof v === 'string' && v.trim().length >= min && v.trim().length <= max;
+        if ((body.name === undefined && body.role === undefined) || (body.name !== undefined && !ok(body.name, 1, 40)) || (body.role !== undefined && !ok(body.role, 2, 120)))
+          return send(res, 400, { ok: false, error: 'shape' });
+        if (body.name !== undefined) bot.name = body.name.trim();
+        if (body.role !== undefined) bot.role = body.role.trim();
+        return send(res, 200, { ok: true, view: name, action, data: { botId: bot.id, name: bot.name, role: bot.role } });
+      }
+      if (name === 'bots' && action === 'moveBot') {
+        const bot = botById(body.botId);
+        const target = groups.flatMap((g) => g.teams).find((t) => t.id === body.teamId);
+        if (!bot) return send(res, 400, { ok: false, error: 'shape', message: '그런 봇이 없어요' });
+        if (!target) return send(res, 400, { ok: false, error: 'shape', message: '그런 팀이 없어요' });
+        if (bot.rank === 'lead' && bot.team !== target.id) return send(res, 400, { ok: false, error: 'shape', message: '팀장은 옮길 수 없어요. 다른 사람을 옮기거나 팀 이름을 바꿔 주세요.' });
+        for (const g of groups) for (const t of g.teams) t.members = t.members.filter((id) => id !== bot.id);
+        target.members.push(bot.id);
+        const from = groups.find((g) => g.bots.includes(bot));
+        const to = groups.find((g) => g.teams.includes(target));
+        bot.team = target.id; bot.channel = target.channel;
+        if (from !== to) { from.bots = from.bots.filter((b) => b !== bot); to.bots.push(bot); }
+        return send(res, 200, { ok: true, view: name, action, data: { botId: bot.id, teamId: target.id } });
+      }
+      if (name === 'bots' && action === 'createTeamFromText') {
+        const text = typeof body.text === 'string' ? body.text.trim() : '';
+        if (text.length < 5 || text.length > 6000) return send(res, 400, { ok: false, error: 'shape', message: '어떤 팀인지 조금만 더 적어 주세요.' });
+        if (/결재 ?없이|묻지 ?말고/.test(text)) return send(res, 400, { ok: false, error: 'shape', message: '결재 없이 하라는 내용은 넣을 수 없어요. 그 줄을 빼고 다시 해 주세요.' });
+        const group = groups.find((g) => g.id === body.group) ?? groups[0];
+        // The real Mac asks a model (a few seconds); the mock takes the name from the text and jobs it finds.
+        await new Promise((r) => setTimeout(r, 1800));
+        const teamName = (/([가-힣A-Za-z0-9]{1,12})\s?팀/.exec(text)?.[1] ?? '새').trim();
+        const purpose = text.split('\n').map((l) => l.replace(/^[-*\d.)\s]+/, '').trim()).find((l) => l.length > 4 && !l.includes('팀이 필요'))?.slice(0, 80) ?? `${teamName} 일을 해요`;
+        const found = JOBS.filter(([job]) => text.includes(job));
+        const jobs = (found.length >= 2 ? found : JOBS.slice(0, 3)).slice(0, 5);
+        const id = `t${Date.now() % 1000000}`;
+        const built = makeTeam({ id, name: teamName, purpose, staffCount: jobs.length, reviewerCount: 0, isNew: true, decidedBy: 'ai', reason: '적어 주신 설명을 보고 역할을 나눴어요.' });
+        built.bots.forEach((b, i) => {
+          if (i === 0) { b.instructions = `오너가 적은 설명:\n${text.slice(0, 1200)}`; b.instructionsBy = 'owner'; return; }
+          const [job, does] = jobs[i - 1];
+          b.name = job; b.role = does;
+        });
+        group.teams.push(built.team);
+        group.bots.push(...built.bots);
+        console.log(`createTeamFromText: ${built.team.name} (${built.bots.length}명) in ${group.label}`);
+        later(600, () => talk(id, id, null, `안녕하세요, ${teamName} 팀장이에요. 적어 주신 대로 ${jobs.map((j) => j[0]).join('·')} 맡을 팀원과 시작할게요.`));
+        return send(res, 200, { ok: true, view: name, action, data: { teamId: id, channel: id, group: group.id, name: built.team.name, purpose,
+          members: built.bots.map((b) => ({ id: b.id, name: b.name, role: b.role })), briefKept: true } });
+      }
       if (name === 'bots' && action === 'setTiers') {
         const team = groups.flatMap((g) => g.teams).find((t) => t.id === body.teamId);
         if (!team) return send(res, 400, { ok: false, error: 'shape' });
@@ -1224,10 +1330,31 @@ const server = http.createServer(async (req, res) => {
     }
     if (p.startsWith('/m/p/')) return send(res, 410, { ok: false, error: 'expired' });
     if (p.startsWith('/m/v1/app/')) return await app(req, res, p.slice('/m/v1/app/'.length), url);
+    // Phone signals (ARCHITECTURE §9.4): the same token as the app; items[].at within 48 hours.
+    if (req.method === 'POST' && p === '/m/v1/ingest') {
+      const token = String(req.headers.authorization ?? '').replace(/^Bearer /, '');
+      if (!(tokens.has(token) || token.startsWith('mock-'))) return send(res, 401, { ok: false });
+      const body = await readJson(req);
+      const items = Array.isArray(body?.items) ? body.items : [];
+      if (body?.v !== 1 || !items.length || items.length > 50) return send(res, 400, { ok: false, error: 'shape' });
+      for (const it of items) {
+        const age = Date.now() - Date.parse(it.at ?? '');
+        if (!(age >= -300_000 && age <= 48 * 3600_000)) return send(res, 400, { ok: false, error: 'at' });
+        const what = it.kind === 'location' ? `${it.lat?.toFixed?.(4)},${it.lng?.toFixed?.(4)} ±${it.accuracy ?? '?'}m${it.label ? ` (${it.label})` : ''}`
+          : it.kind === 'battery' ? `${it.level}%` : it.kind === 'steps' ? `${it.steps}걸음 ${it.date ?? ''}` : JSON.stringify(it);
+        console.log(`ingest ${it.kind}: ${what}`);
+      }
+      return send(res, 200, { ok: true, stored: items.length });
+    }
     // Dev helpers (no auth, this machine only): make things happen while watching the app.
     if (p === '/dev/teamplan') {
       teamPlan = freshTeamPlan();
       teamPlanCard();
+      return send(res, 200, { ok: true });
+    }
+    if (p === '/dev/digest') {
+      append({ type: 'notice', kind: 'digest', text: '저녁 정리 · 2건\n1. 거래처 김대리님 견적 회신 기다림\n2. 내일 오전 10시 치과',
+        choices: [{ id: 'digest:a', label: '1번 답장 써 줘' }, { id: 'digest:b', label: '2번 미루기' }] });
       return send(res, 200, { ok: true });
     }
     if (p === '/dev/card') {

@@ -40,6 +40,14 @@ public struct BotsView: Decodable, Sendable {
         /// §16: how this bot works (its role prompt, ≤1500 chars) and who wrote it: `default` · `ai` · `owner`.
         public var instructions: String?
         public var instructionsBy: String?
+        /// Which AI it runs on, e.g. "Claude Opus · Claude Code 구독" (older Macs send none).
+        public var model: String?
+
+        /// "A 등급 · Claude Opus · Claude Code 구독", or just the grade, or "".
+        public var gradeLine: String {
+            [tier.map { "\($0) 등급" }, model?.trimmingCharacters(in: .whitespacesAndNewlines)]
+                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        }
     }
     public struct Team: Decodable, Hashable, Sendable, Identifiable {
         public var id: String
@@ -76,6 +84,16 @@ public struct BotsView: Decodable, Sendable {
     public func group(forMeeting channel: String) -> Group? { groups.first { $0.meetingChannel == channel } }
     public func bot(id: String) -> Bot? { allBots.first { $0.id == id } }
     public func members(of team: Team) -> [Bot] { team.members.compactMap { bot(id: $0) } }
+
+    /// The models a team runs on, fewest words: one name when they share it, two, or "A / B 외 N".
+    public static func teamModels(_ members: [Bot]) -> String {
+        var names: [String] = []
+        for m in members {
+            guard let n = m.model?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty, !names.contains(n) else { continue }
+            names.append(n)
+        }
+        return names.count <= 2 ? names.joined(separator: " / ") : names.prefix(2).joined(separator: " / ") + " 외 \(names.count - 2)"
+    }
 }
 
 // MARK: docgraph (R4)
@@ -376,8 +394,32 @@ public struct BlocksView: Decodable, Sendable {
         public var trailing: String?
         /// §34: when present, tapping the row sends this sentence to the main chat (like an `ask` block).
         public var message: String?
-        public init(title: String, detail: String? = nil, trailing: String? = nil, message: String? = nil) {
-            self.title = title; self.detail = detail; self.trailing = trailing; self.message = message
+        /// §38: when present, tapping the row reads the same screen again with this query (a folder opening);
+        /// `{}` is the first screen. Wins over `message`. Values are sent as strings.
+        public var query: [String: String]?
+        public init(title: String, detail: String? = nil, trailing: String? = nil, message: String? = nil, query: [String: String]? = nil) {
+            self.title = title; self.detail = detail; self.trailing = trailing; self.message = message; self.query = query
+        }
+        private enum Keys: String, CodingKey { case title, detail, trailing, message, query }
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: Keys.self)
+            title = try c.decode(String.self, forKey: .title)
+            detail = try? c.decodeIfPresent(String.self, forKey: .detail)
+            trailing = try? c.decodeIfPresent(String.self, forKey: .trailing)
+            message = try? c.decodeIfPresent(String.self, forKey: .message)
+            query = (try? c.decodeIfPresent([String: QueryValue].self, forKey: .query))?.flatMap { $0 }?.compactMapValues(\.text)
+        }
+        /// A query value as text: strings as they are, numbers and true/false written out; anything else dropped.
+        struct QueryValue: Decodable {
+            var text: String?
+            init(from decoder: Decoder) throws {
+                let c = try decoder.singleValueContainer()
+                if let s = try? c.decode(String.self) { text = s }
+                else if let i = try? c.decode(Int.self) { text = String(i) }
+                else if let d = try? c.decode(Double.self) { text = String(d) }
+                else if let b = try? c.decode(Bool.self) { text = b ? "true" : "false" }
+                else { text = nil }
+            }
         }
         /// The sentence to send, or nil when the row is not tappable (missing or only spaces).
         public var tapMessage: String? {

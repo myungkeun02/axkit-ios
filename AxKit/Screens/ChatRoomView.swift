@@ -25,7 +25,8 @@ struct ChatRoomView: View {
     }
 
     var body: some View {
-        let rows = feed.rows(items, room: room, lead: lead, assistant: model.assistantName, timeline: model.timeline)
+        let rows = feed.rows(items, room: room, lead: lead, assistant: model.assistantName, timeline: model.timeline,
+                             short: room.isEmpty || model.shortRooms.contains(room))
         let recent = Set(items.suffix(2).map(\.seq))
         let asking = Timeline.openQuestion(items)
         let waiting = model.pendingMessages(in: room)
@@ -189,19 +190,19 @@ struct ChatRoomView: View {
 /// Remembers the rows of one room; RoomFeed.build runs again only when the room's items or speaker change.
 @MainActor final class FeedCache {
     private struct Key: Equatable {
-        var count: Int, first: Int?, last: Int?, cards: Int, lead: RoomFeed.Speaker?, assistant: String, day: Int
+        var count: Int, first: Int?, last: Int?, cards: Int, lead: RoomFeed.Speaker?, assistant: String, day: Int, short: Bool
     }
     private var key: Key?
     private var cached: [RoomFeed.Row] = []
 
-    func rows(_ items: [Timeline.Item], room: String, lead: RoomFeed.Speaker?, assistant: String, timeline: Timeline) -> [RoomFeed.Row] {
+    func rows(_ items: [Timeline.Item], room: String, lead: RoomFeed.Speaker?, assistant: String, timeline: Timeline, short: Bool) -> [RoomFeed.Row] {
         let now = Date()
         // The day is in the key so "오늘" turns into "어제" after midnight.
         let key = Key(count: items.count, first: items.first?.seq, last: items.last?.seq, cards: timeline.cards.count,
-                      lead: lead, assistant: assistant, day: Int(now.timeIntervalSince1970 + 9 * 3600) / 86_400)
+                      lead: lead, assistant: assistant, day: Int(now.timeIntervalSince1970 + 9 * 3600) / 86_400, short: short)
         if key == self.key { return cached }
         self.key = key
-        cached = RoomFeed.build(items, room: room, lead: lead, assistant: assistant, cardDates: timeline.cards.mapValues(\.at), now: now)
+        cached = RoomFeed.build(items, room: room, lead: lead, assistant: assistant, cardDates: timeline.cards.mapValues(\.at), now: now, short: short)
         return cached
     }
 }
@@ -241,7 +242,8 @@ struct ChatComposer: View {
             MentionBar(bots: choices) { bot in draft = Mentions.insert(bot.name, into: draft) }
         }
         HStack(alignment: .bottom, spacing: 8) {
-            if room.isEmpty && model.canAttach && !dictation.isBusy {
+            // §37: team and bot rooms too, when the Mac puts a file in the room it came from (`share-rooms`).
+            if model.canAttach(in: room) && !dictation.isBusy {
                 Menu {
                     Button { pickingPhotos = true } label: { Label("사진 보내기", systemImage: "photo") }
                     Button { pickingFiles = true } label: { Label("파일 보내기", systemImage: "doc") }
@@ -340,7 +342,7 @@ struct ChatComposer: View {
                     guard let data = try? await pick.loadTransferable(type: Data.self) else { continue }
                     // Decoding and shrinking a 48 MP photo takes a while: never on the main thread.
                     let (bytes, type) = await Task.detached(priority: .userInitiated) { ChatRoomView.photoForSending(data) }.value
-                    model.sendFile(bytes, name: "사진-\(Int(Date().timeIntervalSince1970))-\(i + 1).\(type == "image/jpeg" ? "jpg" : "png")", contentType: type)
+                    model.sendFile(bytes, in: room, name: "사진-\(Int(Date().timeIntervalSince1970))-\(i + 1).\(type == "image/jpeg" ? "jpg" : "png")", contentType: type)
                 }
             }
         }
@@ -359,7 +361,7 @@ struct ChatComposer: View {
                         return .success(data)
                     }.value
                     switch read {
-                    case .success(let data): model.sendFile(data, name: name, contentType: type)
+                    case .success(let data): model.sendFile(data, in: room, name: name, contentType: type)
                     case .failure(.tooBig): model.toast = AppModel.tooBigWords
                     case .failure(.unreadable): model.toast = "\(name)을(를) 열지 못했어요."
                     }
@@ -537,9 +539,6 @@ struct FeedEntry: View {
                             .accessibilityAddTraits(.isButton)
                     }
                     if !entry.replies.isEmpty { replies }
-                    if let choices, !choices.isEmpty, asking || model.chosen[entry.seq] != nil {
-                        ChoiceButtons(choices: choices, seq: entry.seq, room: room)
-                    }
                     if entry.source.reactable, model.canReact, showChoices || model.reactions[entry.seq] != nil {
                         ReactionButtons(seq: entry.seq)
                     }
@@ -608,14 +607,21 @@ struct FeedEntry: View {
                         MarkdownText(line).font(.subheadline).fixedSize(horizontal: false, vertical: true)
                     }
                 }
+                buttonsInside
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .background(Theme.assistantBubble, in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
-        } else if !entry.text.isEmpty {
-            HStack(alignment: .lastTextBaseline, spacing: 6) {
-                ExpandableText(text: entry.text, limit: entry.isStatus ? 4 : 10, font: entry.isStatus ? .subheadline : .body)
-                    .foregroundStyle(entry.isStatus ? .secondary : .primary)
-                if entry.repeats > 1 { Text("×\(entry.repeats)").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+        } else if !entry.text.isEmpty || !(choices ?? []).isEmpty {
+            // A line that asks something: one bubble, its buttons inside (§ chat like a chat).
+            VStack(alignment: .leading, spacing: 10) {
+                if !entry.text.isEmpty {
+                    HStack(alignment: .lastTextBaseline, spacing: 6) {
+                        ExpandableText(text: entry.text, limit: entry.isStatus ? 4 : 10, font: entry.isStatus ? .subheadline : .body)
+                            .foregroundStyle(entry.isStatus ? .secondary : .primary)
+                        if entry.repeats > 1 { Text("×\(entry.repeats)").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                    }
+                }
+                buttonsInside
             }
             .padding(.horizontal, 14)
             .padding(.vertical, entry.isStatus ? 8 : 10)
@@ -635,6 +641,14 @@ struct FeedEntry: View {
             AttachedFiles(attachments: n.attachments)
             LinkList(links: n.links)
         default: EmptyView()
+        }
+    }
+
+    /// Every line keeps its buttons: the room's open question can be tapped; answered or older ones are dimmed.
+    @ViewBuilder private var buttonsInside: some View {
+        if let choices, !choices.isEmpty {
+            ChoiceButtons(choices: choices, seq: entry.seq, room: room,
+                          state: ChatChoices.state(seq: entry.seq, live: asking ? entry.seq : nil, picked: model.chosen[entry.seq]))
         }
     }
 
@@ -759,16 +773,17 @@ struct ChoiceButtons: View {
     /// The line the buttons belong to.
     var seq: Int
     var room: String
+    var state: ChatChoices.State = .live
     @Environment(AppModel.self) private var model
     var body: some View {
-        ViewThatFits {
-            HStack { buttons }
-            VStack(alignment: .leading) { buttons }
-        }
+        // Wraps onto more lines as needed (a row of numbered buttons never overflows its bubble).
+        FlowLayout(spacing: 8) { buttons }
     }
     @ViewBuilder private var buttons: some View {
-        // Once one is tapped they all turn off (no second tap sends it twice) and the pick stays marked.
-        let picked = model.chosen[seq]
+        // Once one is tapped they all turn off (no second tap sends it twice) and the pick stays marked; a line the
+        // talk moved past keeps its buttons, dimmed.
+        let picked: String? = if case .done(let p) = state { p } else { nil }
+        let live = state == .live
         ForEach(choices) { choice in
             let on = picked == choice.id
             HStack(spacing: 4) {
@@ -776,11 +791,13 @@ struct ChoiceButtons: View {
                 Text(choice.label)
             }
             .font(.subheadline.weight(.medium))
-            .foregroundStyle(on ? AnyShapeStyle(.white) : picked == nil ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+            .foregroundStyle(on ? AnyShapeStyle(.white) : live ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
             .padding(.horizontal, 14).padding(.vertical, 8)
             .background(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(ActionKind.secondary.background), in: Capsule())
-            .safeTap { if picked == nil { model.choose(choice, of: seq, in: room) } }
+            .opacity(live || on ? 1 : 0.6)
+            .safeTap { if live { model.choose(choice, of: seq, in: room) } }
             .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+            .accessibilityHint(live ? "" : "지난 질문이에요")
         }
     }
 }
@@ -789,12 +806,16 @@ struct NoticeRow: View {
     var notice: NoticeEvent
     var room: String
     var showChoices: Bool
+    @Environment(AppModel.self) private var model
     var body: some View {
         VStack(spacing: 8) {
             ExpandableText(text: ChatText.clean(notice.text), limit: 6, font: .footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            if showChoices, let choices = notice.choices, !choices.isEmpty { ChoiceButtons(choices: choices, seq: notice.seq, room: room) }
+            if let choices = notice.choices, !choices.isEmpty {
+                ChoiceButtons(choices: choices, seq: notice.seq, room: room,
+                              state: ChatChoices.state(seq: notice.seq, live: showChoices ? notice.seq : nil, picked: model.chosen[notice.seq]))
+            }
         }
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
@@ -822,19 +843,92 @@ struct DelegationRow: View {
     }
 }
 
-/// A 결재 in the chat is one line; answering happens in the 결재 tab so the conversation stays readable.
+/// A 결재 in the chat reads like the assistant asking: a bubble with a 결재 요청 chip, the context and question, and its
+/// buttons inside. Answering here shows the pick as the owner's line; the buttons stay, dimmed. Cards with a menu or an
+/// input window are answered in the 결재 tab (the bubble says so).
 struct CardLine: View {
     var card: CardEvent
     @Environment(AppModel.self) private var model
+    @State private var busy: String?
+
+    private var options: [CardOption] { card.options?.isEmpty == false ? card.options! : CardWords.defaultOptions(for: card) }
+    /// Buttons that answer in one tap; menus and input windows need the 결재 tab.
+    private var answersHere: Bool { card.form == nil && (card.selects ?? []).isEmpty }
 
     var body: some View {
         let open = model.timeline.isOpen(card.cardId)
         let closure = model.timeline.closure(of: card.cardId)
-        ChatLineCard(title: open ? "결재 요청" : "결재 끝 · \(CardWords.closedLabel(closure, expired: closure == nil))",
-                     text: CardWords.chatLine(card), titleColor: open ? .accentColor : .secondary, showsChevron: open, lineLimit: open ? 8 : 3)
-            .opacity(open ? 1 : 0.7)
-            .safeTap { if open { model.tab = .approvals } }
-        .accessibilityHint(open ? "결재 탭에서 답해요" : "")
+        let picked = ChatChoices.answeredOption(card, closure)
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Chip(text: open ? "결재 요청" : "결재 끝")
+                    if !open, ChatChoices.cardEcho(card, closure) == nil {
+                        Text(CardWords.closedLabel(closure, expired: closure == nil)).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    MarkdownText(CardWords.chatLine(card))
+                        .font(.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                    AttachedImages(attachments: card.attachments, imageUrl: card.imageUrl, height: 160)
+                    if answersHere {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(options) { option in button(option, open: open, picked: picked) }
+                        }
+                    }
+                    if open {
+                        Label(answersHere ? "결재 탭에서 직접 쓰기·자세히" : "결재 탭에서 답하기", systemImage: "checkmark.seal")
+                            .font(.footnote.weight(.semibold)).foregroundStyle(.tint)
+                            .safeTap { model.tab = .approvals }
+                            .accessibilityAddTraits(.isButton)
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Theme.assistantBubble, in: RoundedRectangle(cornerRadius: Theme.corner, style: .continuous))
+                .opacity(open ? 1 : 0.8)
+            }
+            .padding(.trailing, 28)
+            if let echo = ChatChoices.cardEcho(card, closure) {
+                OwnerBubble(text: echo, footnote: nil)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func button(_ option: CardOption, open: Bool, picked: String?) -> some View {
+        let on = picked == option.id
+        let kind: ActionKind = switch option.tone { case .primary: .primary; case .danger: .danger; default: .secondary }
+        return HStack(spacing: 6) {
+            if on { Image(systemName: "checkmark").font(.caption.weight(.bold)) }
+            Text(option.label).font(.subheadline.weight(.semibold)).multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+            if busy == option.id { ProgressView().tint(kind.foreground) }
+        }
+        .foregroundStyle(open ? kind.foreground : on ? Color.primary : Color.secondary)
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(open ? kind.background : on ? ActionKind.secondary.background : Theme.cardBackground,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .opacity(open || on ? 1 : 0.55)
+        .safeTap { if open { choose(option) } }
+        .accessibilityLabel(option.label)
+        .accessibilityHint(open ? option.detail ?? "" : "끝난 결재예요")
+        .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private func choose(_ option: CardOption) {
+        guard busy == nil else { return }
+        if card.isTeamPlan, CardEvent.teamPlanFixInApp.contains(option.id), model.capabilities.has("team-plan") {
+            model.tab = .more
+            model.moreRoute = "team-plan"
+            return
+        }
+        busy = option.id
+        Task {
+            await model.answer(card, CardWords.answer(for: option))
+            busy = nil
+        }
     }
 }
 

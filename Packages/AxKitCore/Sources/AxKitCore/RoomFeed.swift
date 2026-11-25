@@ -69,8 +69,11 @@ public enum RoomFeed {
     /// - Parameters:
     ///   - lead: who speaks for the room when a line has no author (the team lead, or the room's name).
     ///   - assistant: the assistant's name (main room).
+    ///   - short: 짧게 보기 — replies tucked under what they answer and long runs folded into one line. Off = every line
+    ///     in order with its speaker (the default in team and bot rooms, where the owner wants the whole conversation).
     public static func build(_ items: [Timeline.Item], room: String, lead: Speaker?, assistant: String,
-                             cardDates: [String: Date] = [:], now: Date = Date(), zone: TimeZone = Format.seoul, foldAt: Int = 4) -> [Row] {
+                             cardDates: [String: Date] = [:], now: Date = Date(), zone: TimeZone = Format.seoul, foldAt: Int = 4,
+                             short: Bool = true) -> [Row] {
         // 1. Every item → an entry (someone said something) or a system row.
         enum Unit { case entry(Entry); case system(Timeline.Item) }
         var units: [Unit] = []
@@ -127,6 +130,7 @@ public enum RoomFeed {
         var merged: [Unit] = []
         var threadRoot: [String: Int] = [:]
         for unit in units {
+            if !short { merged.append(unit); continue }
             if case .entry(let e) = unit, let t = e.thread {
                 if let i = threadRoot[t], case .entry(var root) = merged[i] {
                     root.replies.append(e)
@@ -182,7 +186,7 @@ public enum RoomFeed {
             defer { run = []; runKind = nil }
             guard !run.isEmpty else { return }
             let need = runKind == 3 ? foldAt + 2 : foldAt
-            if run.count >= need {
+            if short, run.count >= need {
                 let hidden = Array(run.dropLast(2))
                 var names: [String] = []
                 for e in hidden { for n in [e.speaker.name] + (e.to.map { [$0] } ?? []) where !names.contains(n) { names.append(n) } }

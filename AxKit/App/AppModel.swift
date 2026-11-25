@@ -60,6 +60,7 @@ final class AppModel {
     let recorder = Recorder()
     /// Sends the phone's place when the Mac lists the `location` feature.
     let location = LocationReporter()
+    let signals = SignalsReporter()
     /// A double tap on 보내기 sends once.
     private var repeatGuard = RepeatGuard()
     let recordings: RecordingQueue
@@ -106,6 +107,7 @@ final class AppModel {
         guard let client, !running else { return }
         running = true
         location.appOpened()
+        Task { await signals.check() }
         watchNetwork()
         Task {
             pending = await outbox.pending
@@ -455,6 +457,8 @@ final class AppModel {
         await timelines.forget(key: nil)
         await forgetPairing(keepOutbox: false)
         drafts = [:]
+        signals.reset()
+        location.setOwnerSwitch(false)
         credentials = nil
         client = nil
         connection = .unpaired
@@ -682,6 +686,8 @@ final class AppModel {
             }
             var label: String? = result.answer
             if label == nil, case .text(let text) = answer { label = text }
+            // The button tapped here, by name (an older Mac sends no `answer`; the chat shows it as the owner's line).
+            if label == nil, case .option(let id) = answer { label = card.options?.first { $0.id == id }?.label }
             timeline.closeLocally(card.cardId, state: result.state, answer: label)
             if remember { toast = "앞으로 이런 일은 알아서 할게요" } else if let reply = result.reply, !Self.echoes(reply, answer) { toast = reply }
             return true
@@ -860,13 +866,28 @@ final class AppModel {
     nonisolated static let fileLimit = 12 * 1024 * 1024
     nonisolated static let tooBigWords = "12MB보다 큰 파일은 맥에서 직접 넣어 주세요."
 
-    func sendFile(_ bytes: Data, name: String, contentType: String) {
+    /// The + in a room: the main chat always (with `share`), team and bot rooms only when the Mac knows `share-rooms`
+    /// (an older Mac would drop the file in the main chat).
+    func canAttach(in room: String) -> Bool {
+        canAttach && (room.isEmpty || capabilities.has("share-rooms"))
+    }
+
+    /// 짧게 보기 in team and bot rooms (off by default: every line in order), remembered per room.
+    var shortRooms: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "shortRooms") ?? []) {
+        didSet { UserDefaults.standard.set(Array(shortRooms), forKey: "shortRooms") }
+    }
+
+    func sendFile(_ bytes: Data, in room: String = "", name: String, contentType: String) {
         guard let client else { return }
         guard bytes.count <= Self.fileLimit else { toast = Self.tooBigWords; return }
         sendingFiles += 1
         Task {
             defer { sendingFiles -= 1 }
-            do { _ = try await client.share(bytes, name: name, contentType: contentType) }
+            do { _ = try await client.share(bytes, name: name, contentType: contentType, channel: room.isEmpty ? nil : room) }
+            catch let error as APIError where !room.isEmpty {
+                // A room's file isn't queued: the share queue only knows the main chat.
+                toast = "\(name)을(를) 보내지 못했어요. \(error.friendly)"
+            }
             catch let error as APIError where !error.isFinalRefusal && error != .unauthorized {
                 // Mac out of reach: kept with what the share extension queues, sent when the connection is back.
                 let item = SharedPlace.SharedItem(fileName: name, contentType: contentType)

@@ -58,6 +58,9 @@ targets:
       path: AxKit/AxKit.entitlements
       properties:
         aps-environment: development
+        # 휴대폰 신호 › 걸음: read-only step count from Health, once a day.
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
         keychain-access-groups:
           - $(AppIdentifierPrefix)$(AX_BUNDLE_ID).shared
         com.apple.security.application-groups:
@@ -88,7 +91,8 @@ targets:
           NSAllowsLocalNetworking: true
         NSCameraUsageDescription: 맥에 뜬 연결 QR을 찍을 때만 카메라를 써요.
         NSLocationWhenInUseUsageDescription: 라떼가 지금 계신 곳 기준으로 길찾기·근처 추천을 하려고 위치를 써요
-        NSLocationAlwaysAndWhenInUseUsageDescription: 라떼가 지금 계신 곳 기준으로 길찾기·근처 추천을 하려고 위치를 써요. 항상 허용하면 앱을 닫아 두어도 크게 움직였을 때만 알려요.
+        NSLocationAlwaysAndWhenInUseUsageDescription: 라떼가 지금 계신 곳 기준으로 길찾기·근처 추천을 하려고 위치를 써요. 항상 허용하면 앱을 닫아 두어도 크게 움직였거나 어딘가에 도착·출발했을 때만 알려요.
+        NSHealthShareUsageDescription: 켜 두시면 하루에 한 번 어제 걸음 수만 내 맥에 보내요. 비서가 하루 요약에 써요.
         NSMicrophoneUsageDescription: 회의나 메모를 녹음해 회의록으로 정리하거나, 입력칸에 말로 입력할 때만 마이크를 써요. 받아쓴 소리는 내 맥에서 글로 바꾼 뒤 바로 지워요.
         UIBackgroundModes: [audio, remote-notification]
         AXKeychainGroup: $(AppIdentifierPrefix)$(AX_BUNDLE_ID).shared

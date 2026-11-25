@@ -30,6 +30,7 @@ struct MoreView: View {
         case "first-look": FirstLookScreen()
         case "work": WorkScreen()
         case "people": PeopleScreen()
+        case "signals": PhoneSignalsScreen()
         default: BlocksScreen(name: name)
         }
     }
@@ -69,6 +70,9 @@ struct MoreView: View {
                     model.capabilities.has("browser-live") ? Item("브라우저 화면 넘겨받기", "safari") { AnyView(BrowserLiveScreen()) } : nil,
                     has("spending") ? Item("지출 관리", "wonsign.circle") { AnyView(SpendingScreen()) } : nil,
                     model.capabilities.has("projects") ? Item("프로젝트 가져오기", "folder.badge.gearshape") { AnyView(ProjectsScreen()) } : nil,
+                ])
+                menu("휴대폰", [
+                    Item("휴대폰 신호", "iphone.radiowaves.left.and.right") { AnyView(PhoneSignalsScreen()) },
                 ])
                 menu("AI", [
                     has("usage") ? Item("봇·AI 사용량", "chart.bar") { AnyView(UsageScreen()) } : nil,
@@ -521,6 +525,8 @@ struct HardwareScreen: View {
 
 struct BlocksScreen: View {
     var name: String
+    /// §38: the query a row opened this screen with (a folder); empty = the first screen.
+    var query: [String: String] = [:]
     @Environment(AppModel.self) private var model
     @State private var state: Loadable<BlocksView> = .loading
 
@@ -550,7 +556,7 @@ struct BlocksScreen: View {
                     if let title = b.title { CardHeader(title: title) }
                     CardList(items: (b.rows ?? []).enumerated().map { KV(title: "\($0.offset)", value: "") }) { kv in
                         let r = (b.rows ?? [])[Int(kv.title) ?? 0]
-                        BlockRowView(row: r) {
+                        BlockRowView(row: r, opens: r.query.map { q in AnyView(BlocksScreen(name: name, query: q)) }) {
                             // §34: like an `ask` block — only a chat message; the assistant does the rest.
                             if let message = r.tapMessage {
                                 model.send(message, in: "")
@@ -585,17 +591,31 @@ struct BlocksScreen: View {
 
     private func load() async {
         guard let client = model.client else { return }
-        do { state = .loaded(try await client.view(BlocksView.self, name)) } catch { state = .failed(error.friendly) }
+        do { state = .loaded(try await client.view(BlocksView.self, name, query: query)) } catch { state = .failed(error.friendly) }
     }
 }
 
 /// One row of a `list` block. With `message` (§34) it is a button with a chevron; without, plain text as before.
 private struct BlockRowView: View {
     var row: BlocksView.Row
+    /// §38: the same screen read again with the row's query, pushed so Back returns here. Wins over `message`.
+    var opens: AnyView? = nil
     var tap: () -> Void
 
     var body: some View {
-        if row.tapMessage != nil {
+        if let opens {
+            NavigationLink { opens } label: {
+                CardRow(title: row.title, detail: row.detail) {
+                    HStack(spacing: 6) {
+                        if let t = row.trailing { Text(t).font(.footnote).foregroundStyle(.secondary) }
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("열어요")
+        } else if row.tapMessage != nil {
             Button(action: tap) {
                 CardRow(title: row.title, detail: row.detail) {
                     HStack(spacing: 6) {

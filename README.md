@@ -72,6 +72,8 @@ xcrun simctl openurl booted 'axkit://pair?u=http%3A%2F%2F127.0.0.1%3A47790&n=dev
 화면 바로 열기 링크: `axkit://open/room?id=<방>`, `axkit://open/rooms`, `axkit://open/today`, `axkit://open/docs?q=<찾을 말>`, `axkit://open/doc?id=<문서>`, `axkit://open/more?v=<jobs|usage|health|…>`.
 
 가짜 맥에서 일을 만들어 보기: `curl -s http://127.0.0.1:47790/dev/card`(새 결재), `curl -s 'http://127.0.0.1:47790/dev/notice?text=hi'`.
+`/dev/digest`(번호 버튼이 붙은 저녁 정리). 가짜 맥 환경 변수: `SHARE_ROOMS=off`(방에서 첨부 숨김), `MODELS=none`(봇 모델 없는 옛 맥),
+`LOCATION=off`(위치를 `POST location` 대신 휴대폰 신호 `/m/v1/ingest`로), `CALENDARS=one|limited`, `PEOPLE=none`, `WORK=none`, `DICTATION=off|empty|fail`.
 가짜 맥은 "앱/버그", "주문/사줘", "매일/마다", "인스타" 같은 말에 반응해 봇에게 맡기기·결재·반복 작업을 흉내 냅니다.
 키체인의 연결 정보를 지우고 처음부터 보려면 앱을 `-resetPairing` 인자로 실행하세요.
 
@@ -84,6 +86,12 @@ xcrun simctl openurl booted 'axkit://pair?u=http%3A%2F%2F127.0.0.1%3A47790&n=dev
 4. 연결 끊기: 더보기 › 설정 및 연결 › 연결 끊기(맥에서도 즉시 폐기).
 
 내 아이폰에 설치하려면 `Config/Local.xcconfig.example`를 `Config/Local.xcconfig`로 복사해 번들 id와 팀을 넣고 Xcode에서 실행하세요.
+
+## 휴대폰 신호
+
+더보기 › 휴대폰 신호: 위치(크게 움직일 때·도착/출발, "항상" 허용), 배터리(20·10·5% 아래, 충전 중 제외), 걸음(건강 앱, 하루 한 번 어제 합계)을
+켜 둔 것만 `POST /m/v1/ingest`(앱 토큰)로 보내요. 맥이 `location` 기능을 알리면 위치는 지금처럼 `POST location`. 문자·다른 앱 알림은 iOS에서
+읽을 수 없어 단축어 자동화가 그대로 맡아요. 걸음 때문에 앱에 HealthKit 권한(읽기만)이 들어 있어요.
 
 ## 푸시·공유·위젯
 
